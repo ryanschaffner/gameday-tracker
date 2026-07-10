@@ -81,6 +81,7 @@
   .slot .who{font-size:11px;color:var(--ink);font-weight:700;line-height:1.05;margin-top:0;}
   .slot .wasname{font-size:9px;color:var(--f);opacity:.9;font-weight:700;line-height:1.05;margin-top:1px;}
   .slot .tag{display:inline-block;font-size:9px;color:#fff;font-weight:800;background:var(--green);border-radius:8px;padding:1px 6px;margin-top:1px;}
+  .tiredmark{position:absolute;top:-4px;right:2px;font-size:14px;background:#fff;border-radius:50%;line-height:1;padding:2px;box-shadow:0 1px 3px rgba(0,0,0,.3);}
   .slot.dragover .jrsy{transform:scale(1.12);filter:drop-shadow(0 5px 8px rgba(20,30,60,.35));}
   .bench.benchover{outline:2px dashed var(--green);outline-offset:2px;border-radius:10px;}
   .dragbubble{position:fixed;z-index:90;left:0;top:0;background:var(--green);color:#fff;padding:7px 13px;border-radius:20px;
@@ -103,6 +104,8 @@
   .bench{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
   .chip{background:#eef4f0;border:1px solid var(--line);border-radius:18px;padding:5px 11px;font-size:13px;font-weight:600;}
   .chip.warn{background:#fff3e0;border-color:#f0c98a;color:#a05a00;}
+  .chip.tired{background:#fdecea;border-color:#f0a8a0;color:#c62828;cursor:pointer;}
+  .chip[onclick]{cursor:pointer;}
   /* qtabs */
   .qtabs{display:flex;gap:5px;margin:4px 0 8px;}
   .qtabs button{flex:1;padding:9px 4px;border:1px solid var(--line);background:#fff;border-radius:9px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;}
@@ -425,7 +428,7 @@ function createTeam(){
   if(!names.length){ alert("Add at least one player (one name per line)."); return; }
   state.settings.teamName=tn||"My Team";
   state.settings.defaultFormation=fm;
-  state.roster=names.map(n=>({id:uid("p"),name:n,gk:false,number:""}));
+  state.roster=names.map(n=>({id:uid("p"),name:n,gk:false,number:"",notes:""}));
   save(); ui.view="games"; render();
 }
 function renderGames(){
@@ -556,8 +559,9 @@ function renderGame(){
       disc=jerseySVG(s.grp,"","empty");
     }
     const dragPid=(startPid && !open)? startPid : "";
+    const tiredMark=(curPid && s.grp!=="GK" && isTired(curPid)) ? `<div class="tiredmark">😓</div>` : "";
     h+=`<div class="slot ${cls}" data-slot="${s.id}" data-drag="slot" data-pid="${dragPid}" style="left:${s.x}%;top:${s.y}%">
-      ${disc}<div class="pos">${s.pos}</div>${who}${tag}</div>`;
+      ${disc}${tiredMark}<div class="pos">${s.pos}</div>${who}${tag}</div>`;
   });
   h+=`</div>`;
   h+=`<div class="muted" style="font-size:11.5px;margin-top:3px">Drag a bench chip or a player onto a spot to set the lineup · tap a spot to pick · <span style="color:var(--f);font-weight:700">OPEN</span> = vacated by a move, fill it with a sub.</div>`;
@@ -605,9 +609,20 @@ function renderGame(){
   h+=`</div>`;
 
   // quarter minutes quick
-  h+=`<div class="card"><b style="font-size:13px">This quarter's minutes</b><div class="bench" style="margin-top:6px">`;
+  h+=`<div class="card"><b style="font-size:13px">This quarter's minutes</b>
+    <div class="muted" style="font-size:11.5px;margin:3px 0 6px">Tap an on-field player who looks tired — Suggest subs will bring them off first.</div>
+    <div class="bench" style="margin-top:2px">`;
   const qm={}; quarterStints(q).forEach(st=>{ qm[st.pid]=(qm[st.pid]||0)+st.min; });
-  present.forEach(pid=>{ const v=qm[pid]||0; h+=`<span class="chip${v===0?' warn':''}">${esc(firstName(name(pid)))} ${fmt(v)}'</span>`; });
+  present.forEach(pid=>{
+    const v=qm[pid]||0;
+    const onSlot=FORMATIONS[q.formation].slots.find(s=>slotOccupantAt(q,s.id,QLEN)===pid);
+    const canFlag=onSlot && onSlot.grp!=="GK";
+    const tired=isTired(pid);
+    const cls='chip'+(v===0?' warn':'')+(tired?' tired':'');
+    h+= canFlag
+      ? `<span class="${cls}" onclick="toggleTired('${pid}')">${tired?'😓 ':''}${esc(firstName(name(pid)))} ${fmt(v)}'</span>`
+      : `<span class="${cls}">${esc(firstName(name(pid)))} ${fmt(v)}'</span>`;
+  });
   h+=`</div></div>`;
   return h;
 }
@@ -765,8 +780,10 @@ function openPicker(qi,slot){
   (g.present||[]).forEach((pid,i)=>{
     const used=onField.includes(pid)&&q.lineup[slot]!==pid;
     const here=q.lineup[slot]===pid;
+    const rp=state.roster.find(x=>x.id===pid);
+    const noteHtml=(rp&&rp.notes)? `<div class="muted" style="font-size:11px;margin-top:1px">${esc(rp.notes)}</div>`:"";
     h+=`<div class="pickrow" onclick="assignSlot(${qi},'${slot}','${pid}')" style="${here?'border-color:var(--green);background:var(--green-light)':''}">
-      <span class="ord">${i+1}</span><span style="flex:1">${esc(name(pid))}</span>
+      <span class="ord">${i+1}</span><div style="flex:1"><div>${esc(name(pid))}</div>${noteHtml}</div>
       ${here?'<span class="pill">starting here</span>':(used?'<span class="muted" style="font-size:12px">✓ on field</span>':'')}</div>`;
   });
   if(!(g.present||[]).length) h+=`<div class="muted">No one is checked in yet.</div>`;
@@ -865,29 +882,73 @@ function applyMassSub(qi){
   pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute,on:p.on}); });
   save(); closeSheet(); render();
 }
+// ---- Tired flag (manual, coach-observed) ----
+function isTired(pid){ const g=curGame(); return !!(g && g.tired && g.tired.includes(pid)); }
+function toggleTired(pid){ const g=curGame(); if(!g) return; g.tired=g.tired||[];
+  const i=g.tired.indexOf(pid); if(i>=0) g.tired.splice(i,1); else g.tired.push(pid);
+  save(); render(); }
+// Consecutive minutes a player has been on the field (any position), ending at (qi,atMinute),
+// not counting time spent in goal. The streak breaks the moment they're off the field entirely,
+// and can carry across a quarter boundary if they were never benched.
+function consecutiveOutfieldMinutes(pid,qi,atMinute){
+  const g=curGame(); if(!g) return 0;
+  const STEP=0.5; let total=0, q=qi, t=Math.max(0,Math.min(QLEN,atMinute));
+  while(q>=0){
+    const quarter=g.quarters[q]; if(!quarter) break;
+    let stopped=false;
+    while(t>0){
+      const mid=t-STEP/2;
+      const slot=occupantSlotOf(quarter,pid,mid);
+      if(!slot){ stopped=true; break; }
+      if(slot!=="gk") total+=STEP;
+      t-=STEP;
+    }
+    if(stopped) break;
+    q--; t=QLEN;
+  }
+  return total;
+}
 // ---- Suggested subs (parity + rest) ----
-// Pairs the highest-minute on-field outfielders (tired/over) with the lowest-minute bench players.
+// Priority 1: any coach-flagged tired players currently on the field — trust the eye test.
+// Priority 2 (fallback, nobody flagged): whoever has the longest unbroken stretch on the field,
+// not counting goalie minutes. Paired with the lowest-total-minutes bench players (fairest to bring on).
 function suggestSubPairs(qi,minute){
   const g=curGame(); const q=g.quarters[qi]; const present=g.present||[];
   const slots=FORMATIONS[q.formation].slots;
-  // projected total game minutes per player under the current plan (no new subs)
+  // total minutes played so far under the current plan — used to pick who comes ON (fairness)
   const proj={}; present.forEach(p=>proj[p]=0);
   g.quarters.forEach(qq=>{ quarterStints(qq).forEach(st=>{ if(proj[st.pid]!=null) proj[st.pid]+=st.min; }); });
   const onField=slots.filter(s=>s.grp!=="GK")
     .map(s=>({slot:s.id,pos:s.pos,pid:slotOccupantAt(q,s.id,minute)})).filter(x=>x.pid);
   const benchNow=present.filter(p=> !slots.some(s=>slotOccupantAt(q,s.id,minute)===p) );
-  const offCands=onField.slice().sort((a,b)=> proj[b.pid]-proj[a.pid]); // most minutes/tired first
-  const onCands=benchNow.slice().sort((a,b)=> proj[a]-proj[b]);          // fewest minutes first
+  const onCands=benchNow.slice().sort((a,b)=> proj[a]-proj[b]); // fewest minutes first
+
+  const tired=(g.tired||[]);
+  const tiredOnField=onField.filter(f=>tired.includes(f.pid));
+  let offCands, overrideGuard;
+  if(tiredOnField.length){
+    offCands=tiredOnField.slice().sort((a,b)=> proj[b.pid]-proj[a.pid]);
+    overrideGuard=true; // manual flag always wins, regardless of minute balance
+  } else {
+    offCands=onField.slice().sort((a,b)=> consecutiveOutfieldMinutes(b.pid,qi,minute)-consecutiveOutfieldMinutes(a.pid,qi,minute));
+    overrideGuard=false;
+  }
+
   const pairs=[]; const n=Math.min(offCands.length,onCands.length);
   for(let i=0;i<n;i++){
-    if(proj[offCands[i].pid] > proj[onCands[i]] + 0.1) // only swap if it actually evens things out
-      pairs.push({slot:offCands[i].slot,pos:offCands[i].pos,off:offCands[i].pid,on:onCands[i]});
+    const offPid=offCands[i].pid;
+    const ok = overrideGuard ? true
+      : (consecutiveOutfieldMinutes(offPid,qi,minute) > 0 && proj[offPid] > proj[onCands[i]] + 0.1);
+    if(ok) pairs.push({slot:offCands[i].slot,pos:offCands[i].pos,off:offPid,on:onCands[i]});
   }
   return pairs;
 }
 function openSuggestSubs(qi){
+  const g=curGame(); const hasTired=(g.tired||[]).length>0;
   let h=`<h3>Suggest subs · Q${qi+1}</h3>`;
-  h+=`<div class="note">Brings your lowest-minute players on for the highest-minute (most tired) players — to even out playing time and rest tired legs. The keeper stays on. Minutes split automatically.</div>`;
+  h+=hasTired
+    ? `<div class="note">Bringing off your flagged 😓 tired players first, paired with your lowest-minute bench players. The keeper stays on. Minutes split automatically.</div>`
+    : `<div class="note">No one's flagged tired, so this brings on your freshest bench players for whoever's been on the field longest without a break (goalie time doesn't count against them). Tap a player below the field to flag them tired instead. The keeper stays on.</div>`;
   h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="6" onchange="renderSuggestPreview(${qi})">`;
   h+=`<div id="ssPreview"></div>`;
   h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applySuggestSubs(${qi})">Apply these subs</button>
@@ -992,10 +1053,13 @@ function renderRoster(){
   h+=`<div class="muted" style="font-size:12.5px;margin:0 2px 6px">Add a jersey <b>#</b> (optional — the number shows on the jersey, otherwise initials do). Tap 🧤 to add a player to the <b>keeper pool</b>; Auto-plan &amp; Keep-GK pick keepers only from this pool, falling back to anyone if none are tagged or present.</div>`;
   h+=`<div class="card">`;
   state.roster.forEach(p=>{
-    h+=`<div class="pl"><input type="number" inputmode="numeric" min="0" max="99" value="${p.number??""}" placeholder="#" onchange="setNumber('${p.id}',this.value)" title="Jersey number" style="width:46px;text-align:center;padding:6px 4px;font-weight:800">
-      <div class="nm"><input value="${esc(p.name)}" onchange="renamePlayer('${p.id}',this.value)" style="border:none;padding:6px 2px;font-weight:600"></div>
-      <button class="btn sm ${p.gk?'':'ghost'}" onclick="toggleGK('${p.id}')" title="Keeper pool">🧤</button>
-      <button class="btn red sm" onclick="removePlayer('${p.id}')">✕</button></div>`;
+    h+=`<div style="border:1px solid var(--line);border-radius:10px;margin:6px 0;padding:9px 11px;background:#fff">
+      <div class="pl" style="border:none;margin:0;padding:0">
+        <input type="number" inputmode="numeric" min="0" max="99" value="${p.number??""}" placeholder="#" onchange="setNumber('${p.id}',this.value)" title="Jersey number" style="width:46px;text-align:center;padding:6px 4px;font-weight:800">
+        <div class="nm"><input value="${esc(p.name)}" onchange="renamePlayer('${p.id}',this.value)" style="border:none;padding:6px 2px;font-weight:600"></div>
+        <button class="btn sm ${p.gk?'':'ghost'}" onclick="toggleGK('${p.id}')" title="Keeper pool">🧤</button>
+        <button class="btn red sm" onclick="removePlayer('${p.id}')">✕</button></div>
+      <input value="${esc(p.notes||"")}" onchange="setNotes('${p.id}',this.value)" placeholder="Notes — e.g. strong CB, avoid ST, still learning left foot" style="width:100%;margin-top:7px;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;color:var(--ink)"></div>`;
   });
   h+=`</div>`;
   h+=`<label class="fld" style="margin-left:2px">Team name</label><input value="${esc(state.settings.teamName||"")}" onchange="setTeam(this.value)" style="margin:0 0 6px">`;
@@ -1004,10 +1068,11 @@ function renderRoster(){
   h+=`</select>`;
   return h;
 }
-function addPlayer(){ state.roster.push({id:uid("p"),name:"New player",gk:false}); save(); render(); }
+function addPlayer(){ state.roster.push({id:uid("p"),name:"New player",gk:false,notes:""}); save(); render(); }
 function toggleGK(id){ const p=state.roster.find(x=>x.id===id); if(p){ p.gk=!p.gk; save(); render(); } }
 function setNumber(id,v){ const p=state.roster.find(x=>x.id===id); if(p){ p.number=(v===""||v==null)?null:String(v).trim(); save(); render(); } }
 function renamePlayer(id,v){ const p=state.roster.find(x=>x.id===id); if(p)p.name=v.trim()||p.name; save(); }
+function setNotes(id,v){ const p=state.roster.find(x=>x.id===id); if(p){ p.notes=v; save(); } }
 function removePlayer(id){ if(!confirm("Remove this player from the roster? Past game data stays intact."))return;
   state.roster=state.roster.filter(p=>p.id!==id); save(); render(); }
 function setTeam(v){ state.settings.teamName=v; save(); render(); }
