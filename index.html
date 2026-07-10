@@ -771,8 +771,17 @@ function rotateAreas(qi){
   const g=curGame(); const q=g.quarters[qi];
   const formation=FORMATIONS[q.formation]; const outSlots=formation.slots.filter(s=>s.grp!=="GK");
   const gk=gkForFill(qi);
+  const priorGk=q.lineup.gk||null; // whoever's sitting in goal for this quarter right now (e.g. from Carry over)
   let pool=(g.present||[]).slice(); if(gk) pool=pool.filter(p=>p!==gk);
   let current=outSlots.map(s=>q.lineup[s.id]||null);
+  // Keeper handoff (e.g. Carry over pulled in the 1st-half keeper, but the 2nd-half keeper is
+  // someone else): swap them directly so the outgoing keeper takes the incoming keeper's spot
+  // on the field instead of quietly falling off the roster into the bench.
+  if(gk && priorGk && priorGk!==gk){
+    const idx=current.indexOf(gk);
+    if(idx>=0) current[idx]=priorGk;
+    else { const empty=current.indexOf(null); if(empty>=0) current[empty]=priorGk; }
+  }
   const used=new Set(current.filter(Boolean));
   const spare=pool.filter(p=>!used.has(p));
   current=current.map(pid=> pid || spare.shift() || null);
