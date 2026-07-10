@@ -769,27 +769,48 @@ function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi]
 // so a circular shift by the size of the D group moves each block into the next area.
 function rotateAreas(qi){
   const g=curGame(); const q=g.quarters[qi];
-  const formation=FORMATIONS[q.formation]; const outSlots=formation.slots.filter(s=>s.grp!=="GK");
-  const gk=gkForFill(qi);
-  const priorGk=q.lineup.gk||null; // whoever's sitting in goal for this quarter right now (e.g. from Carry over)
-  let pool=(g.present||[]).slice(); if(gk) pool=pool.filter(p=>p!==gk);
-  let current=outSlots.map(s=>q.lineup[s.id]||null);
-  // Keeper handoff (e.g. Carry over pulled in the 1st-half keeper, but the 2nd-half keeper is
-  // someone else): swap them directly so the outgoing keeper takes the incoming keeper's spot
-  // on the field instead of quietly falling off the roster into the bench.
-  if(gk && priorGk && priorGk!==gk){
-    const idx=current.indexOf(gk);
-    if(idx>=0) current[idx]=priorGk;
-    else { const empty=current.indexOf(null); if(empty>=0) current[empty]=priorGk; }
+  const formation=FORMATIONS[q.formation];
+  const gk=gkForFill(qi); // settings-derived keeper (explicit half pick, "keep last keeper", or a real pool) — null if truly auto with no info
+  const priorGk=q.lineup.gk||null;
+
+  if(gk){
+    // Settings have an opinion on who's keeper — respect it. If that means a handoff (someone
+    // different from whoever Carry over left in goal), swap them onto the field instead of
+    // letting the outgoing keeper quietly fall off the lineup, then rotate the outfield as usual.
+    const outSlots=formation.slots.filter(s=>s.grp!=="GK");
+    let pool=(g.present||[]).slice().filter(p=>p!==gk);
+    let current=outSlots.map(s=>q.lineup[s.id]||null);
+    if(priorGk && priorGk!==gk){
+      const idx=current.indexOf(gk);
+      if(idx>=0) current[idx]=priorGk;
+      else { const empty=current.indexOf(null); if(empty>=0) current[empty]=priorGk; }
+    }
+    const used=new Set(current.filter(Boolean));
+    const spare=pool.filter(p=>!used.has(p));
+    current=current.map(pid=> pid || spare.shift() || null);
+    if(!current.some(Boolean)){ alert("Check players in and set a lineup first."); return; }
+    const dCount=outSlots.filter(s=>s.grp==="D").length;
+    const shifted=current.slice(dCount).concat(current.slice(0,dCount));
+    const lineup={gk:gk};
+    outSlots.forEach((s,i)=>{ if(shifted[i]) lineup[s.id]=shifted[i]; });
+    q.lineup=lineup; q.subs=[]; save(); render();
+    return;
   }
+
+  // No settings-derived keeper at all (both halves on auto, "keep last keeper" off, and no
+  // keeper tagged in the pool) — treat goal as just another rotating area so it's never left
+  // empty and whoever was in goal always lands somewhere real on the field.
+  const allSlots=formation.slots; // ordered GK, then D-block, then M-block, then F-block
+  let pool=(g.present||[]).slice();
+  let current=allSlots.map(s=>q.lineup[s.id]||null);
   const used=new Set(current.filter(Boolean));
   const spare=pool.filter(p=>!used.has(p));
   current=current.map(pid=> pid || spare.shift() || null);
   if(!current.some(Boolean)){ alert("Check players in and set a lineup first."); return; }
-  const dCount=outSlots.filter(s=>s.grp==="D").length;
-  const shifted=current.slice(dCount).concat(current.slice(0,dCount));
-  const lineup={}; if(gk) lineup.gk=gk;
-  outSlots.forEach((s,i)=>{ if(shifted[i]) lineup[s.id]=shifted[i]; });
+  const gkCount=allSlots.filter(s=>s.grp==="GK").length;
+  const shifted=current.slice(gkCount).concat(current.slice(0,gkCount));
+  const lineup={};
+  allSlots.forEach((s,i)=>{ if(shifted[i]) lineup[s.id]=shifted[i]; });
   q.lineup=lineup; q.subs=[]; save(); render();
 }
 function assignSlot(qi,slot,pid){ const g=curGame(); const q=g.quarters[qi];
