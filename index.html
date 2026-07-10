@@ -574,7 +574,9 @@ function renderGame(){
     <button class="btn ghost sm" onclick="suggestBalance(${ui.qi})">⚖︎ Balance time</button>
     <button class="btn ghost sm" onclick="autoFill(${ui.qi})">↻ By arrival order</button>
     ${ui.qi>0?`<button class="btn ghost sm" onclick="carryOver(${ui.qi})">⏮ Carry over Q${ui.qi}</button>`:""}
-    <button class="btn ghost sm" onclick="clearQ(${ui.qi})">✕ Clear</button></div>`;
+    <button class="btn ghost sm" onclick="rotateAreas(${ui.qi})">🔄 Rotate areas</button>
+    <button class="btn ghost sm" onclick="clearQ(${ui.qi})">✕ Clear</button></div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Rotate areas shifts everyone currently in the lineup between defense, midfield and forward — handy when you've got exactly enough players and no one to sub in. Works great paired with Carry over.</div>`;
   if(ui.qi>0){
     h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:13px;font-weight:600"><input type="checkbox" ${g.keepGK!==false?'checked':''} onchange="setKeepGK(this.checked)" style="width:auto"> Keep last quarter's keeper in goal</label>`;
     h+=`<div class="muted" style="font-size:11.5px;margin-top:7px">Plan this quarter anytime · <b>Carry over Q${ui.qi}</b> starts it from Q${ui.qi}'s final players (after subs).</div>`;
@@ -761,6 +763,26 @@ function carryOver(qi){ const g=curGame(); if(qi<1) return; const prev=g.quarter
   save(); render();
 }
 function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi].subs=[]; save(); render(); }
+// Shift whoever's currently in this quarter's lineup between defense/midfield/forward —
+// for squads with no bench to sub from. Leaves the goalkeeper alone (managed separately).
+// Slots within each FORMATIONS entry are already ordered D-block, then M-block, then F-block,
+// so a circular shift by the size of the D group moves each block into the next area.
+function rotateAreas(qi){
+  const g=curGame(); const q=g.quarters[qi];
+  const formation=FORMATIONS[q.formation]; const outSlots=formation.slots.filter(s=>s.grp!=="GK");
+  const gk=gkForFill(qi);
+  let pool=(g.present||[]).slice(); if(gk) pool=pool.filter(p=>p!==gk);
+  let current=outSlots.map(s=>q.lineup[s.id]||null);
+  const used=new Set(current.filter(Boolean));
+  const spare=pool.filter(p=>!used.has(p));
+  current=current.map(pid=> pid || spare.shift() || null);
+  if(!current.some(Boolean)){ alert("Check players in and set a lineup first."); return; }
+  const dCount=outSlots.filter(s=>s.grp==="D").length;
+  const shifted=current.slice(dCount).concat(current.slice(0,dCount));
+  const lineup={}; if(gk) lineup.gk=gk;
+  outSlots.forEach((s,i)=>{ if(shifted[i]) lineup[s.id]=shifted[i]; });
+  q.lineup=lineup; q.subs=[]; save(); render();
+}
 function assignSlot(qi,slot,pid){ const g=curGame(); const q=g.quarters[qi];
   if(pid){ // remove pid from any other slot
     Object.keys(q.lineup).forEach(s=>{ if(q.lineup[s]===pid) delete q.lineup[s]; });
@@ -840,8 +862,11 @@ function openMassSub(qi){
   const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
   const benchNow=present.filter(p=>!onField.some(f=>f.pid===p));
   if(!benchNow.length){ alert("No one is on the bench to sub in."); return; }
+  const hasTired=(g.tired||[]).some(pid=>onField.some(f=>f.pid===pid));
   let h=`<h3>Sub the whole bench · Q${qi+1}</h3>`;
-  h+=`<div class="note">Brings every bench player on at once, swapping out whoever's been on longest this quarter. Minutes split automatically.</div>`;
+  h+=hasTired
+    ? `<div class="note">Brings every bench player on, swapping out your flagged 😓 tired players first. Minutes split automatically.</div>`
+    : `<div class="note">Brings every bench player on at once, swapping out whoever's been on the field longest without a break (goalie time doesn't count). Tap a player below the field to flag them tired instead. Minutes split automatically.</div>`;
   h+=`<label class="fld">Minute of the sub</label><input id="msMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="6">`;
   h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:14px;font-weight:600"><input type="checkbox" id="msKeepGk" checked style="width:auto"> Keep the keeper on (don't swap GK)</label>`;
   h+=`<div id="msPreview"></div>`;
@@ -857,12 +882,19 @@ function massPairs(qi){
   const keepGk=document.getElementById("msKeepGk")? document.getElementById("msKeepGk").checked : true;
   const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
   const benchNow=present.filter(p=>!onField.some(f=>f.pid===p));
-  const qmin={}; quarterStints(q).forEach(st=>{ qmin[st.pid]=(qmin[st.pid]||0)+st.min; });
+  // total minutes so far under the current plan — brings on the freshest bench players first
+  const proj={}; present.forEach(p=>proj[p]=0);
+  g.quarters.forEach(qq=>{ quarterStints(qq).forEach(st=>{ if(proj[st.pid]!=null) proj[st.pid]+=st.min; }); });
+  const bench=benchNow.slice().sort((a,b)=> proj[a]-proj[b]);
   let swap=onField.filter(f=> !(keepGk && f.grp==="GK"));
-  swap.sort((a,b)=> (qmin[b.pid]||0)-(qmin[a.pid]||0)); // most-played comes off first
-  const n=Math.min(benchNow.length, swap.length); const pairs=[];
-  for(let i=0;i<n;i++){ pairs.push({on:benchNow[i], slot:swap[i].slot, pos:swap[i].pos, off:swap[i].pid}); }
-  return {pairs, leftover: benchNow.length-n};
+  const tired=(g.tired||[]);
+  const tiredOff=swap.filter(f=>tired.includes(f.pid)).sort((a,b)=> proj[b.pid]-proj[a.pid]);
+  const restOff=swap.filter(f=>!tired.includes(f.pid))
+    .sort((a,b)=> consecutiveOutfieldMinutes(b.pid,qi,QLEN)-consecutiveOutfieldMinutes(a.pid,qi,QLEN));
+  swap=tiredOff.concat(restOff); // flagged-tired players always come off first, regardless of minutes
+  const n=Math.min(bench.length, swap.length); const pairs=[];
+  for(let i=0;i<n;i++){ pairs.push({on:bench[i], slot:swap[i].slot, pos:swap[i].pos, off:swap[i].pid}); }
+  return {pairs, leftover: bench.length-n};
 }
 function renderMassPreview(qi){
   const {pairs,leftover}=massPairs(qi);
