@@ -168,28 +168,65 @@
 //// ---------- Formations ----------
 const QLEN = 12;
 const FORMATIONS = {
-  "3-3-1": {label:"3-3-1", slots:[
+  "3-3-1": {label:"3-3-1", size:8, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:22,y:72},{id:"cb",pos:"CB",grp:"D",x:50,y:72},{id:"rb",pos:"RB",grp:"D",x:78,y:72},
     {id:"lm",pos:"LM",grp:"M",x:22,y:50},{id:"cm",pos:"CM",grp:"M",x:50,y:52},{id:"rm",pos:"RM",grp:"M",x:78,y:50},
     {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
-  "2-3-2": {label:"2-3-2", slots:[
+  "2-3-2": {label:"2-3-2", size:8, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:32,y:74},{id:"rb",pos:"RB",grp:"D",x:68,y:74},
     {id:"lm",pos:"LM",grp:"M",x:20,y:52},{id:"cm",pos:"CM",grp:"M",x:50,y:54},{id:"rm",pos:"RM",grp:"M",x:80,y:52},
     {id:"lf",pos:"LF",grp:"F",x:35,y:28},{id:"rf",pos:"RF",grp:"F",x:65,y:28}]},
-  "3-2-2": {label:"3-2-2", slots:[
+  "3-2-2": {label:"3-2-2", size:8, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
     {id:"lm",pos:"LM",grp:"M",x:32,y:52},{id:"rm",pos:"RM",grp:"M",x:68,y:52},
     {id:"lf",pos:"LF",grp:"F",x:35,y:28},{id:"rf",pos:"RF",grp:"F",x:65,y:28}]},
-  "3-1-2-1": {label:"3-1-2-1", slots:[
+  "3-1-2-1": {label:"3-1-2-1", size:8, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:22,y:75},{id:"cb",pos:"CB",grp:"D",x:50,y:72},{id:"rb",pos:"RB",grp:"D",x:78,y:75},
     {id:"dm",pos:"DM",grp:"M",x:50,y:60},
     {id:"lm",pos:"LM",grp:"M",x:30,y:44},{id:"rm",pos:"RM",grp:"M",x:70,y:44},
-    {id:"st",pos:"ST",grp:"F",x:50,y:26}]}
+    {id:"st",pos:"ST",grp:"F",x:50,y:26}]},
+  // 7v7 fallbacks (6 outfield + GK) — used automatically when fewer than 8 are present
+  "2-3-1 (7v7)": {label:"2-3-1 · 7v7", size:7, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:28,y:74},{id:"rb",pos:"RB",grp:"D",x:72,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:22,y:50},{id:"cm",pos:"CM",grp:"M",x:50,y:52},{id:"rm",pos:"RM",grp:"M",x:78,y:50},
+    {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
+  "3-2-1 (7v7)": {label:"3-2-1 · 7v7", size:7, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:32,y:52},{id:"rm",pos:"RM",grp:"M",x:68,y:52},
+    {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
+  // 6v6 fallbacks (5 outfield + GK)
+  "2-2-1 (6v6)": {label:"2-2-1 · 6v6", size:6, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:30,y:74},{id:"rb",pos:"RB",grp:"D",x:70,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:30,y:50},{id:"rm",pos:"RM",grp:"M",x:70,y:50},
+    {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
+  "1-3-1 (6v6)": {label:"1-3-1 · 6v6", size:6, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"cb",pos:"CB",grp:"D",x:50,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:22,y:50},{id:"cm",pos:"CM",grp:"M",x:50,y:52},{id:"rm",pos:"RM",grp:"M",x:78,y:50},
+    {id:"st",pos:"ST",grp:"F",x:50,y:28}]}
 };
+// All formation keys of a given total-player size (GK + outfield), largest-size-first for
+// "closest fit at or below N" lookups.
+function formationsOfSize(n){ return Object.keys(FORMATIONS).filter(k=>FORMATIONS[k].size===n); }
+// Best-fit formation for however many players are actually present. Prefers an exact match
+// (8/7/6); if present count doesn't land exactly on one of those, uses the largest supported
+// size that doesn't exceed it, so we never assume more players than are there. Below 6, falls
+// back to the smallest supported shape (6v6) — some slots will just show as open, same as today.
+function bestFormationFor(n){
+  const sizes=[8,7,6];
+  let target=sizes.find(s=>s===n);
+  if(!target) target=sizes.filter(s=>s<=n).sort((a,b)=>b-a)[0] || 6;
+  const cur=state.settings.defaultFormation;
+  if(FORMATIONS[cur] && FORMATIONS[cur].size===target) return cur;
+  return formationsOfSize(target)[0];
+}
 const GRP_LABEL = {GK:"Keeper",D:"Defense",M:"Midfield",F:"Forward"};
 const GRP_ORDER = ["GK","D","M","F"];
 const GRP_COLOR = {GK:"#1f2a44",D:"#2f6fb0",M:"#1e3a8a",F:"#c0392b"};
@@ -345,8 +382,10 @@ function playerInQuarterMinutes(g,qi,pid){
   let s=0; quarterStints(g.quarters[qi]).forEach(st=>{ if(st.pid===pid) s+=st.min; }); return s;
 }
 //// ---------- Playing-time targets ----------
-// Fair share = all field-minutes (8 on field × full game) split across everyone present, capped at a full game.
-function fairShare(g){ const N=(g.present||[]).length; if(!N) return 0; return Math.min(QLEN*4, 8*QLEN*4 / N); }
+// Fair share = all field-minutes (however many are on the field at once × full game) split across
+// everyone present, capped at a full game. Field size follows the formation actually in play
+// (8/7/6), not a hardcoded 8, so smaller-squad games still produce a sane target.
+function fairShare(g){ const N=(g.present||[]).length; if(!N) return 0; const fieldSize=Math.min(N,8); return Math.min(QLEN*4, fieldSize*QLEN*4 / N); }
 function targetFor(g){ const t=(g.targetMin!=null && g.targetMin!=="")? parseFloat(g.targetMin):NaN; return isNaN(t)? fairShare(g): t; }
 function ptStatus(total,target){ const tol=6; if(total<target-tol) return {k:"short",lbl:"▼ short"}; if(total>target+tol) return {k:"over",lbl:"▲ over"}; return {k:"on",lbl:"✓ on"}; }
 function setTarget(v){ const g=curGame(); g.targetMin=(v===""||v==null)?null:v; save(); render(); }
@@ -374,8 +413,9 @@ function keeperForQuarter(qi){ const g=curGame(); const k=g.keepers||{};
 function autoRotateGame(){
   const g=curGame(); const present=(g.present||[]).slice(); const N=present.length;
   if(!N){ alert("Check players in first."); return; }
-  if(N<8){ if(!confirm("Only "+N+" present (need 8 for a full side). Plan all 4 quarters anyway with some open spots?")) return; }
-  else if(!confirm("Auto-plan all 4 quarters for even minutes? This replaces lineups you've set.")) return;
+  const fit=bestFormationFor(N);
+  if(N<6){ if(!confirm("Only "+N+" present (need at least 6 for a full side). Plan all 4 quarters anyway with some open spots?")) return; }
+  else if(!confirm("Auto-plan all 4 quarters ("+FORMATIONS[fit].label+") for even minutes? This replaces lineups you've set.")) return;
   // 1) Decide the keeper for each quarter (explicit half-keepers first, then pool, then anyone).
   const poolPres=gkPoolPresent(); const kfb=poolPres.length?poolPres:present; const k=g.keepers||{};
   let kH1=(k.h1&&present.includes(k.h1))?k.h1:(g.keepGK!==false?(kfb[0]||null):null);
@@ -389,7 +429,7 @@ function autoRotateGame(){
   const running={}; present.forEach(p=>running[p]=0);
   for(let q=0;q<4;q++){
     const keeper=keeperByQ[q];
-    const fm=g.quarters[q].formation || state.settings.defaultFormation;
+    const fm=fit;
     const slots=FORMATIONS[fm].slots;
     const lineup={}; let fillSlots, cand;
     if(keeper){ lineup["gk"]=keeper; running[keeper]+=QLEN; fillSlots=slots.filter(s=>s.id!=="gk"); cand=present.filter(p=>p!==keeper); }
@@ -400,7 +440,7 @@ function autoRotateGame(){
     let rot=playOut.slice(); if(rot.length){ const off=(q*3)%rot.length; rot=rot.slice(off).concat(rot.slice(0,off)); } // vary positions
     rot.forEach((pid,i)=>{ lineup[fillSlots[i].id]=pid; });
     playOut.forEach(p=>{ running[p]+=QLEN; });
-    g.quarters[q]={formation:fm, lineup, subs:[]};
+    g.quarters[q]={formation:fm, lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
   }
   rebalanceAuto(g,present,keeperByQ);   // even out totals (spread to one quarter)
   protectKeepers(g,present,keeperByQ);  // and make sure keepers aren't the ones stuck playing a full game
@@ -472,7 +512,7 @@ function renderSetup(){
     <label class="fld" style="margin-top:0">Team name</label>
     <input id="setupTeam" placeholder="e.g. Strikers FC" value="${esc(state.settings.teamName||"")}">
     <label class="fld">Default formation</label><select id="setupFormation">`;
-  Object.keys(FORMATIONS).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
+  formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
   h+=`</select>
     <label class="fld">Players — one name per line</label>
     <textarea id="setupNames" placeholder="Ava&#10;Mia&#10;Sofia&#10;…" style="width:100%;min-height:150px;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical"></textarea>
@@ -601,7 +641,7 @@ function renderGame(){
   h+=`<div class="card">`;
   h+=`<div class="row between"><label class="fld" style="margin:0">Formation</label>
     <select style="width:auto" onchange="setFormation(${ui.qi},this.value)">`;
-  Object.keys(FORMATIONS).forEach(f=>{ h+=`<option value="${f}" ${q.formation===f?'selected':''}>${f}</option>`; });
+  Object.keys(FORMATIONS).forEach(f=>{ h+=`<option value="${f}" ${q.formation===f?'selected':''}>${FORMATIONS[f].label}</option>`; });
   h+=`</select></div>`;
   if(!present.length){ h+=`<div class="note">Check players in above, then tap a position to assign someone.</div>`; }
   // suggest-next-quarter prompt (shown when this quarter isn't set yet)
@@ -867,6 +907,10 @@ function toggleAttend(pid){ const g=curGame(); g.present=g.present||[];
       q.subs=(q.subs||[]).filter(x=>x.on!==pid); });
     clearTired(pid);
   } else g.present.push(pid);
+  // For any quarter nobody's touched yet (empty lineup, no subs), keep its formation matched to
+  // how many are actually present today — nothing to lose since there's no lineup to clear.
+  const fit=bestFormationFor(g.present.length);
+  g.quarters.forEach(q=>{ if(!Object.keys(q.lineup).length && !(q.subs||[]).length) q.formation=fit; });
   save(); render();
 }
 function setFormation(qi,f){ const g=curGame(); const q=g.quarters[qi];
@@ -1369,7 +1413,7 @@ function renderRoster(){
   h+=`</div>`;
   h+=`<label class="fld" style="margin-left:2px">Team name</label><input value="${esc(state.settings.teamName||"")}" onchange="setTeam(this.value)" style="margin:0 0 6px">`;
   h+=`<label class="fld" style="margin-left:2px">Default formation for new games</label><select onchange="setDefFormation(this.value)">`;
-  Object.keys(FORMATIONS).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
+  formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
   h+=`</select>`;
   return h;
 }
