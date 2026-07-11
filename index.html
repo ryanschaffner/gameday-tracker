@@ -1414,7 +1414,7 @@ function renderRoster(){
         <div class="nm"><input value="${esc(p.name)}" onchange="renamePlayer('${p.id}',this.value)" style="border:none;padding:6px 2px;font-weight:600"></div>
         <button class="btn sm ${p.gk?'':'ghost'}" onclick="toggleGK('${p.id}')" title="Keeper pool">🧤</button>
         <button class="btn red sm" onclick="removePlayer('${p.id}')">✕</button></div>
-      <input value="${esc(p.notes||"")}" onchange="setNotes('${p.id}',this.value)" placeholder="Notes — e.g. strong CB, avoid ST, still learning left foot" style="width:100%;margin-top:7px;font-size:16px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;color:var(--ink)"></div>`;
+      <textarea onchange="setNotes('${p.id}',this.value)" placeholder="Notes — e.g. strong CB, avoid ST, still learning left foot" style="width:100%;margin-top:7px;font-size:16px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;color:var(--ink);min-height:44px;resize:vertical">${esc(p.notes||"")}</textarea></div>`;
   });
   h+=`</div>`;
   h+=`<label class="fld" style="margin-left:2px">Team name</label><input value="${esc(state.settings.teamName||"")}" onchange="setTeam(this.value)" style="margin:0 0 6px">`;
