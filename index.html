@@ -1503,6 +1503,11 @@ function benchFromSlot(slot){ const g=curGame(); const q=g.quarters[ui.qi]; dele
 document.querySelectorAll("nav.tabbar button").forEach(b=>b.addEventListener("click",()=>go(b.dataset.nav)));
 setupDrag();
 load(); render();
+// Register the service worker so the app keeps working with no signal at the field.
+// Fails silently if unsupported (older browsers) — the app still works online either way.
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{ navigator.serviceWorker.register("./sw.js").catch(()=>{}); });
+}
 </script>
 </body>
 </html>
