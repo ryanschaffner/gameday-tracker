@@ -55,6 +55,11 @@
   .between{justify-content:space-between;}
   .muted{color:var(--muted);}
   .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:var(--green-light);color:var(--green-dark);}
+  .clockcard{padding:12px 14px;}
+  .clocktime{font-size:32px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--green-dark);letter-spacing:.5px;}
+  .clockcard.warn .clocktime{color:#c0392b;}
+  .clockcard.done{background:#fdecea;border-color:#f0a8a0;}
+  .clockcard.done .clocktime{color:#c62828;}
   input,select{font-size:15px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);width:100%;}
   label.fld{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:10px 0 3px;text-transform:uppercase;letter-spacing:.4px;}
   .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:14px;}
@@ -205,7 +210,7 @@ function jerseySVG(grp,label,mode){
 const KEY = "soccerGameTrackerV1";
 let state, ui = {view:"games", gameId:null, qi:0};
 
-function blankQuarter(f){ return {formation:f, lineup:{}, subs:[]}; }
+function blankQuarter(f){ return {formation:f, lineup:{}, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}}; }
 function defaultState(){
   return { roster:[], games:[], settings:{defaultFormation:"3-3-1", teamName:""} };
 }
@@ -213,6 +218,8 @@ function load(){
   try{ const r=localStorage.getItem(KEY); state = r? JSON.parse(r): defaultState(); }
   catch(e){ state = defaultState(); }
   if(!state.settings) state.settings={defaultFormation:"3-3-1",teamName:""};
+  // migrate older saved games that don't have a clock yet
+  (state.games||[]).forEach(g=>{ (g.quarters||[]).forEach(q=>{ if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0}; }); });
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
 function uid(p){ return p+Math.random().toString(36).slice(2,8); }
@@ -221,6 +228,58 @@ function fmt(m){ return (Math.round(m*10)/10).toString().replace(/\.0$/,""); }
 function curGame(){ return state.games.find(g=>g.id===ui.gameId); }
 // Our score = number of logged goals (falls back to a manually-entered score for older games with none logged)
 function ourScore(g){ return Array.isArray(g.goals) ? g.goals.length : (parseInt(g.us)||0); }
+
+//// ---------- Quarter clock ----------
+function clockElapsedSec(q){
+  if(!q || !q.clock) return 0;
+  const c=q.clock; let ms=c.elapsedMs||0;
+  if(c.running && c.startedAt) ms+=Math.max(0,Date.now()-c.startedAt);
+  return Math.min(QLEN*60, Math.floor(ms/1000));
+}
+function clockRemainingLabel(q){
+  const rem=Math.max(0, QLEN*60-clockElapsedSec(q));
+  const m=Math.floor(rem/60), s=rem%60;
+  return m+":"+String(s).padStart(2,"0");
+}
+function toggleClock(qi){
+  const g=curGame(); if(!g) return; const q=g.quarters[qi];
+  if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0};
+  if(q.clock.running){
+    q.clock.elapsedMs=(q.clock.elapsedMs||0)+Math.max(0,Date.now()-q.clock.startedAt);
+    q.clock.running=false; q.clock.startedAt=null;
+  } else {
+    if(clockElapsedSec(q)>=QLEN*60) return; // finished — nothing to resume, use Reset
+    q.clock.running=true; q.clock.startedAt=Date.now();
+  }
+  save(); render();
+}
+function resetClock(qi){
+  const g=curGame(); if(!g) return;
+  g.quarters[qi].clock={running:false,startedAt:null,elapsedMs:0};
+  save(); render();
+}
+// Current clock reading in minutes (nearest 0.5), for defaulting sub-minute fields to "right now."
+// Returns null if the clock hasn't been started yet, so callers can fall back to a sensible default.
+function clockMinuteNow(qi){
+  const g=curGame(); if(!g) return null; const q=g.quarters[qi]; if(!q) return null;
+  const sec=clockElapsedSec(q); if(sec<=0) return null;
+  return Math.min(QLEN, Math.round((sec/60)*2)/2);
+}
+// Lightweight tick — updates only the visible clock text directly rather than a full render(),
+// so a running clock doesn't interrupt whatever the coach is doing (typing, an open sheet, etc).
+setInterval(()=>{
+  try{
+    if(!state || !ui || ui.view!=="game") return;
+    const g=curGame(); if(!g) return;
+    const q=g.quarters[ui.qi]; if(!q || !q.clock) return;
+    const el=document.getElementById("clockDisplay");
+    if(el) el.textContent=clockRemainingLabel(q);
+    if(q.clock.running && clockElapsedSec(q)>=QLEN*60){
+      q.clock.elapsedMs=QLEN*60*1000; q.clock.running=false; q.clock.startedAt=null;
+      save(); render();
+    }
+  }catch(e){}
+}, 500);
 
 //// ---------- Minutes engine ----------
 // Per quarter: walk each slot's timeline from lineup[slot] (minute 0) through subs (sorted), to QLEN.
@@ -525,6 +584,20 @@ function renderGame(){
   if(ui.qi===4){ h+=renderGameMinutes(g); return h; }
 
   const q=g.quarters[ui.qi];
+  if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0};
+  const clkSec=clockElapsedSec(q), clkDone=clkSec>=QLEN*60, clkWarn=!clkDone && clkSec>=(QLEN*60-60);
+  h+=`<div class="card clockcard${clkDone?' done':(clkWarn?' warn':'')}">
+    <div class="row between">
+      <div class="clocktime" id="clockDisplay">${clockRemainingLabel(q)}</div>
+      <div class="row" style="gap:6px">
+        ${clkDone
+          ? `<span class="pill" style="background:#fdecea;color:#c62828">Time's up</span>`
+          : `<button class="btn sm" onclick="toggleClock(${ui.qi})">${q.clock.running?'⏸ Pause':'▶ Start'}</button>`}
+        <button class="btn ghost sm" onclick="resetClock(${ui.qi})">↺ Reset</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">Q${ui.qi+1} clock · ${fmt(QLEN)} min. Sub times below default to whatever this shows when you log them.</div>
+  </div>`;
   h+=`<div class="card">`;
   h+=`<div class="row between"><label class="fld" style="margin:0">Formation</label>
     <select style="width:auto" onchange="setFormation(${ui.qi},this.value)">`;
@@ -709,6 +782,7 @@ function toggleAttend(pid){ const g=curGame(); g.present=g.present||[];
   if(i>=0){ g.present.splice(i,1); // also remove from lineups/subs
     g.quarters.forEach(q=>{ Object.keys(q.lineup).forEach(s=>{ if(q.lineup[s]===pid) delete q.lineup[s]; });
       q.subs=(q.subs||[]).filter(x=>x.on!==pid); });
+    clearTired(pid);
   } else g.present.push(pid);
   save(); render();
 }
@@ -759,7 +833,8 @@ function suggestBalance(qi){ const g=curGame(); const q=g.quarters[qi];
 function carryOver(qi){ const g=curGame(); if(qi<1) return; const prev=g.quarters[qi-1];
   const slots=FORMATIONS[prev.formation].slots; const lineup={};
   slots.forEach(s=>{ const occ=slotOccupantAt(prev,s.id,QLEN); if(occ) lineup[s.id]=occ; });
-  g.quarters[qi]={formation:prev.formation, lineup:lineup, subs:[]};
+  // starting a new quarter — its clock always begins fresh, regardless of the previous quarter's
+  g.quarters[qi]={formation:prev.formation, lineup:lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
   save(); render();
 }
 function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi].subs=[]; save(); render(); }
@@ -851,7 +926,7 @@ function openSub(qi){
   h+=`<label class="fld">Position</label><select id="subSlot">`;
   slots.forEach(s=>{ const cur=q.lineup[s.id]; h+=`<option value="${s.id}">${s.pos} — ${cur?esc(name(cur)):"(empty)"}</option>`; });
   h+=`</select>`;
-  h+=`<label class="fld">Minute of the sub</label><input id="subMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="6">`;
+  h+=`<label class="fld">Minute of the sub</label><input id="subMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}">`;
   const benchP=[], fieldP=[];
   (g.present||[]).forEach(pid=>{ const sl=occupantSlotOf(q,pid,QLEN); if(sl) fieldP.push({pid,sl}); else benchP.push(pid); });
   h+=`<label class="fld">Player coming on</label><select id="subOn">`;
@@ -872,6 +947,8 @@ function saveSub(qi){
   const on=document.getElementById("subOn").value;
   if(isNaN(minute)) minute=0; minute=Math.max(0,Math.min(QLEN,minute));
   q.subs=q.subs||[];
+  // Whoever's currently in this slot is coming off — clear their tired flag now that they're resting.
+  clearTired(slotOccupantAt(q,slot,minute));
   // If this player is already on the field elsewhere, this is a position move —
   // vacate their old spot at the same minute so they aren't counted twice.
   const occSlot=occupantSlotOf(q,on,minute);
@@ -897,7 +974,7 @@ function openMassSub(qi){
   h+=hasTired
     ? `<div class="note">Brings every bench player on, swapping out your flagged 😓 tired players first. Minutes split automatically.</div>`
     : `<div class="note">Brings every bench player on at once, swapping out whoever's been on the field longest without a break (goalie time doesn't count). Tap a player below the field to flag them tired instead. Minutes split automatically.</div>`;
-  h+=`<label class="fld">Minute of the sub</label><input id="msMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="6">`;
+  h+=`<label class="fld">Minute of the sub</label><input id="msMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}">`;
   h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:14px;font-weight:600"><input type="checkbox" id="msKeepGk" checked style="width:auto"> Keep the keeper on (don't swap GK)</label>`;
   h+=`<div id="msPreview"></div>`;
   h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applyMassSub(${qi})">Swap them in</button>
@@ -941,7 +1018,7 @@ function applyMassSub(qi){
   const {pairs}=massPairs(qi);
   if(!pairs.length){ alert("No swaps to apply."); return; }
   q.subs=q.subs||[];
-  pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute,on:p.on}); });
+  pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute,on:p.on}); clearTired(p.off); });
   save(); closeSheet(); render();
 }
 // ---- Tired flag (manual, coach-observed) ----
@@ -949,6 +1026,9 @@ function isTired(pid){ const g=curGame(); return !!(g && g.tired && g.tired.incl
 function toggleTired(pid){ const g=curGame(); if(!g) return; g.tired=g.tired||[];
   const i=g.tired.indexOf(pid); if(i>=0) g.tired.splice(i,1); else g.tired.push(pid);
   save(); render(); }
+// Clears the tired flag once a player actually comes off the field — so if they go back on
+// later, they start fresh instead of immediately showing tired again from a stale flag.
+function clearTired(pid){ const g=curGame(); if(g && g.tired && pid) g.tired=g.tired.filter(p=>p!==pid); }
 // Consecutive minutes a player has been on the field (any position), ending at (qi,atMinute),
 // not counting time spent in goal. The streak breaks the moment they're off the field entirely,
 // and can carry across a quarter boundary if they were never benched.
@@ -1011,7 +1091,7 @@ function openSuggestSubs(qi){
   h+=hasTired
     ? `<div class="note">Bringing off your flagged 😓 tired players first, paired with your lowest-minute bench players. The keeper stays on. Minutes split automatically.</div>`
     : `<div class="note">No one's flagged tired, so this brings on your freshest bench players for whoever's been on the field longest without a break (goalie time doesn't count against them). Tap a player below the field to flag them tired instead. The keeper stays on.</div>`;
-  h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="6" onchange="renderSuggestPreview(${qi})">`;
+  h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}" onchange="renderSuggestPreview(${qi})">`;
   h+=`<div id="ssPreview"></div>`;
   h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applySuggestSubs(${qi})">Apply these subs</button>
     <button class="btn ghost" onclick="closeSheet()">Cancel</button></div>`;
@@ -1031,7 +1111,7 @@ function applySuggestSubs(qi){
   const pairs=suggestSubPairs(qi,m);
   if(!pairs.length){ alert("Minutes are already balanced — no subs suggested."); return; }
   q.subs=q.subs||[];
-  pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute:m,on:p.on}); });
+  pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute:m,on:p.on}); clearTired(p.off); });
   save(); closeSheet(); render();
 }
 // ---- Goals & assists ----
