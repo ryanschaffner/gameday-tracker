@@ -733,31 +733,49 @@ function renderGameMinutes(g){
   if(g.notes) h+=`<div class="card"><b style="font-size:13px">Notes</b><div class="muted" style="font-size:14px;margin-top:4px;white-space:pre-wrap">${esc(g.notes)}</div></div>`;
   h+=`<div class="card"><b style="font-size:14px">Send postgame summary</b>
     <div class="muted" style="font-size:13px;margin:3px 0 8px">Emails the minutes, score, and your notes. Edit recipients in your mail app.</div>
-    <div class="row" style="gap:8px"><button class="btn wide" onclick="emailSummary('${g.id}')">✉︎ Email summary</button>
-    <button class="btn ghost" onclick="copySummary('${g.id}')">⧉ Copy</button></div></div>`;
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn wide" onclick="emailSummary('${g.id}')">✉︎ Email summary</button>
+    <button class="btn ghost" onclick="copySummary('${g.id}')">⧉ Copy</button></div>
+    <div class="muted" style="font-size:11.5px;margin-top:9px">Email links can only send plain text — no bold or color, in any mail app. For a nicer-looking email: <button class="btn ghost sm" style="margin-top:5px" onclick="copySummaryHTML('${g.id}')">🎨 Copy formatted</button> copies a version with a real table and color-coded status, ready to paste into a new email draft (Gmail, Apple Mail, Outlook, etc.) instead of using the button above.</div></div>`;
   return h;
 }
+function fmtDateLong(d){
+  if(!d) return "";
+  try{ const dt=new Date(d+"T00:00:00"); if(isNaN(dt.getTime())) return d;
+    return dt.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric",year:"numeric"});
+  }catch(e){ return d; }
+}
+// Plain-text summary, formatted to read cleanly in any mail client. Mailto bodies are always
+// plain text — no bold/colors/tables — so this leans on short lines, "·" separators, and simple
+// divider rules instead of padded columns (which only line up in a monospace font and look
+// broken in the proportional fonts most mail apps compose with).
 function gameSummaryText(g){
-  const mm=gameMinutes(g); const present=g.present||[];
+  const mm=gameMinutes(g); const present=g.present||[]; const target=targetFor(g);
+  const DIV="––––––––––––––––––––";
   const L=[];
-  L.push((state.settings.teamName||"Team")+(g.opp?(" vs "+g.opp):""));
-  let line=g.date||"";
-  if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){ const us=ourScore(g), them=(g.them!==""&&g.them!=null)?+g.them:0; const r=(us>them)?"W":((us<them)?"L":"T"); line+="   Final: "+us+"-"+them+" ("+r+")"; }
-  line+="   Target: "+fmt(targetFor(g))+" min/player"; L.push(line); L.push("");
-  const target=targetFor(g);
-  L.push("MINUTES (max "+fmt(QLEN*4)+"):");
+  L.push("⚽ "+(state.settings.teamName||"Team")+(g.opp?(" vs "+g.opp):""));
+  const sub=[];
+  if(g.date) sub.push(fmtDateLong(g.date));
+  if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){
+    const us=ourScore(g), them=(g.them!==""&&g.them!=null)?+g.them:0;
+    const r=(us>them)?"W":((us<them)?"L":"T");
+    sub.push("Final "+us+"–"+them+" ("+r+")");
+  }
+  sub.push("Target "+fmt(target)+" min/player");
+  L.push(sub.join("  ·  "));
+  L.push("");
+  L.push(DIV); L.push("⏱ PLAYING TIME  (max "+fmt(QLEN*4)+" min)"); L.push(DIV);
   const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:[0,0,0,0],grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
   list.forEach(r=>{ const qs=r.m.q.map(x=>fmt(x)||"0").join("/"); const st=ptStatus(r.m.total,target);
-    L.push("  "+name(r.pid).padEnd(10)+" "+fmt(r.m.total).padStart(4)+"   "+(st.k==="short"?"(short)":st.k==="over"?"(over) ":"(on)   ")+" (Q "+qs+")"); });
+    L.push(name(r.pid)+" — "+fmt(r.m.total)+" min  ·  "+st.lbl+"  ·  Q "+qs); });
   const short=list.filter(r=>ptStatus(r.m.total,target).k==="short").map(r=>name(r.pid));
-  if(short.length){ L.push(""); L.push("BELOW TARGET: "+short.join(", ")); }
-  // goals & assists
-  if((g.goals||[]).length){ L.push(""); L.push("GOALS ("+(g.goals.length)+"):");
-    g.goals.forEach(gl=>{ L.push("  "+(gl.scorer?name(gl.scorer):"Unknown")+(gl.assist?("  (assist "+name(gl.assist)+")"):"")); }); }
-  // position group spread
-  L.push(""); L.push("POSITION MINUTES (GK/Def/Mid/Fwd):");
-  list.forEach(r=>{ const gp=r.m.grp; L.push("  "+name(r.pid).padEnd(10)+" "+fmt(gp.GK||0)+"/"+fmt(gp.D||0)+"/"+fmt(gp.M||0)+"/"+fmt(gp.F||0)); });
-  if(g.notes){ L.push(""); L.push("NOTES:"); L.push(g.notes); }
+  if(short.length){ L.push(""); L.push("Below target: "+short.join(", ")); }
+  if((g.goals||[]).length){
+    L.push(""); L.push(DIV); L.push("⚽ GOALS ("+g.goals.length+")"); L.push(DIV);
+    g.goals.forEach(gl=>{ L.push((gl.scorer?name(gl.scorer):"Unknown")+(gl.assist?("  (assist "+name(gl.assist)+")"):"")); });
+  }
+  L.push(""); L.push(DIV); L.push("📍 POSITION MINUTES  (GK / Def / Mid / Fwd)"); L.push(DIV);
+  list.forEach(r=>{ const gp=r.m.grp; L.push(name(r.pid)+" — "+fmt(gp.GK||0)+" / "+fmt(gp.D||0)+" / "+fmt(gp.M||0)+" / "+fmt(gp.F||0)); });
+  if(g.notes){ L.push(""); L.push(DIV); L.push("📝 NOTES"); L.push(DIV); L.push(g.notes); }
   return L.join("\n");
 }
 function emailSummary(id){ const g=state.games.find(x=>x.id===id); if(!g)return;
@@ -770,8 +788,73 @@ function copySummary(id){ const g=state.games.find(x=>x.id===id); if(!g)return;
   if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(()=>alert("Summary copied.")).catch(()=>fallbackCopy(txt)); }
   else fallbackCopy(txt);
 }
-function fallbackCopy(txt){ const ta=document.createElement("textarea"); ta.value=txt; document.body.appendChild(ta); ta.select();
-  try{ document.execCommand("copy"); alert("Summary copied."); }catch(e){ alert("Copy not supported — here it is:\n\n"+txt); } ta.remove(); }
+// Rich-text version for pasting into an email draft (mailto links can never carry HTML — every
+// mail app treats the body as plain text — so this copies real HTML to the clipboard instead,
+// which Gmail/Apple Mail/Outlook compose windows render with formatting intact when pasted).
+function gameSummaryHTML(g){
+  const mm=gameMinutes(g); const present=g.present||[]; const target=targetFor(g);
+  const COLOR={on:"#1b7a3d",short:"#c0392b",over:"#a05a00"};
+  const BG={on:"#e7f6ec",short:"#fdecea",over:"#fff3e0"};
+  const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:[0,0,0,0],grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
+  let h=`<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a2238;max-width:600px">`;
+  h+=`<h2 style="margin:0 0 4px;font-size:20px;color:#13235a">⚽ ${esc(state.settings.teamName||"Team")}${g.opp?" vs "+esc(g.opp):""}</h2>`;
+  const sub=[];
+  if(g.date) sub.push(esc(fmtDateLong(g.date)));
+  if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){
+    const us=ourScore(g), them=(g.them!==""&&g.them!=null)?+g.them:0; const r=(us>them)?"W":((us<them)?"L":"T");
+    sub.push("Final <b>"+us+"–"+them+"</b> ("+r+")");
+  }
+  sub.push("Target "+fmt(target)+" min/player");
+  h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${sub.join(" &nbsp;&middot;&nbsp; ")}</div>`;
+
+  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(QLEN*4)} min)</span></h3>`;
+  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
+  h+=`<tr style="text-align:left;color:#8890a3;font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:5px 8px 5px 0">Player</th><th style="padding:5px 8px">Min</th><th style="padding:5px 8px">Status</th><th style="padding:5px 0 5px 8px">By quarter</th></tr>`;
+  list.forEach((r,i)=>{
+    const qs=r.m.q.map(x=>fmt(x)||"0").join(" / "); const st=ptStatus(r.m.total,target); const bg=i%2?"#f7f8fb":"#ffffff";
+    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(name(r.pid))}</td>`+
+       `<td style="padding:6px 8px">${fmt(r.m.total)}</td>`+
+       `<td style="padding:6px 8px"><span style="background:${BG[st.k]};color:${COLOR[st.k]};padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700;white-space:nowrap">${st.lbl}</span></td>`+
+       `<td style="padding:6px 0 6px 8px;color:#697089">${qs}</td></tr>`;
+  });
+  h+=`</table>`;
+  const short=list.filter(r=>ptStatus(r.m.total,target).k==="short").map(r=>esc(name(r.pid)));
+  if(short.length) h+=`<div style="font-size:13px;color:#c0392b;margin-bottom:6px"><b>Below target:</b> ${short.join(", ")}</div>`;
+
+  if((g.goals||[]).length){
+    h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⚽ Goals (${g.goals.length})</h3>`;
+    h+=`<ul style="margin:0 0 8px;padding-left:18px;font-size:13.5px">`;
+    g.goals.forEach(gl=>{ h+=`<li>${gl.scorer?esc(name(gl.scorer)):"Unknown"}${gl.assist?` <span style="color:#697089">(assist ${esc(name(gl.assist))})</span>`:""}</li>`; });
+    h+=`</ul>`;
+  }
+
+  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📍 Position Minutes <span style="font-weight:400;color:#697089;font-size:12.5px">(GK / Def / Mid / Fwd)</span></h3>`;
+  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
+  list.forEach((r,i)=>{ const gp=r.m.grp; const bg=i%2?"#f7f8fb":"#ffffff";
+    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(name(r.pid))}</td><td style="padding:6px 0;color:#697089">${fmt(gp.GK||0)} / ${fmt(gp.D||0)} / ${fmt(gp.M||0)} / ${fmt(gp.F||0)}</td></tr>`; });
+  h+=`</table>`;
+
+  if(g.notes) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📝 Notes</h3><div style="font-size:13.5px;white-space:pre-wrap">${esc(g.notes)}</div>`;
+  h+=`</div>`;
+  return h;
+}
+function copySummaryHTML(id){
+  const g=state.games.find(x=>x.id===id); if(!g) return;
+  const html=gameSummaryHTML(g), text=gameSummaryText(g);
+  if(navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem!=="undefined"){
+    const item=new ClipboardItem({
+      "text/html": new Blob([html],{type:"text/html"}),
+      "text/plain": new Blob([text],{type:"text/plain"})
+    });
+    navigator.clipboard.write([item])
+      .then(()=>alert("Formatted summary copied — paste it into a new email to keep the table and colors."))
+      .catch(()=>fallbackCopy(text,"Your browser blocked rich copying, so I copied the plain-text version instead."));
+  } else {
+    fallbackCopy(text,"Your browser doesn't support rich copying here, so I copied the plain-text version instead.");
+  }
+}
+function fallbackCopy(txt,msg){ const ta=document.createElement("textarea"); ta.value=txt; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); alert(msg||"Summary copied."); }catch(e){ alert("Copy not supported — here it is:\n\n"+txt); } ta.remove(); }
 function afterGameRender(){}
 
 //// ---------- Game mutations ----------
@@ -1144,28 +1227,19 @@ document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id=
 
 //// ---------- Season ----------
 function renderSeason(){
-  const stats={}; let gamesCount=state.games.length;
-  state.roster.forEach(p=>stats[p.id]={total:0,grp:{GK:0,D:0,M:0,F:0},games:0,goals:0,assists:0});
-  state.games.forEach(g=>{ const mm=gameMinutes(g);
-    (g.present||[]).forEach(pid=>{ if(stats[pid]) stats[pid].games++; });
-    Object.keys(mm).forEach(pid=>{ if(!stats[pid])return; stats[pid].total+=mm[pid].total;
-      GRP_ORDER.forEach(gr=>stats[pid].grp[gr]+=mm[pid].grp[gr]); });
-    (g.goals||[]).forEach(gl=>{ if(gl.scorer&&stats[gl.scorer]) stats[gl.scorer].goals++; if(gl.assist&&stats[gl.assist]) stats[gl.assist].assists++; });
-  });
+  const {stats,record,gamesCount}=seasonStats();
   let h=`<h2 style="margin:4px 2px;font-size:18px">Season Totals</h2>`;
   if(!gamesCount){ h+=`<div class="empty">No games logged yet.<br>Minutes and positions will build up here across the season.</div>`; return h; }
-  // record
-  let w=0,l=0,t=0;
-  state.games.forEach(g=>{ if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){ const us=ourScore(g),them=(g.them!==""&&g.them!=null)?+g.them:0; if(us>them)w++;else if(us<them)l++;else t++; } });
-  h+=`<div class="card"><div class="row between"><b>Record</b><span class="pill">${w}-${l}-${t}</span></div>
+  h+=`<div class="card"><div class="row between"><b>Record</b><span class="pill">${record.w}-${record.l}-${record.t}</span></div>
     <div class="muted" style="font-size:13px;margin-top:3px">${gamesCount} game${gamesCount>1?"s":""} logged</div></div>`;
   // minutes table
   const maxT=Math.max(1,...Object.values(stats).map(s=>s.total));
   h+=`<div class="card"><b style="font-size:13px">Total minutes &amp; fairness</b>
-    <div class="muted" style="font-size:12.5px;margin:3px 0 6px">Sorted low→high so anyone short on time is up top.</div>`;
-  h+=`<table><thead><tr><th class="name">Player</th><th>Gms</th><th>Min</th><th style="width:34%">Share</th></tr></thead><tbody>`;
+    <div class="muted" style="font-size:12.5px;margin:3px 0 6px">Sorted low→high so anyone short on time is up top. Avg/Gm helps spot uneven minutes even when games-played differs.</div>`;
+  h+=`<table><thead><tr><th class="name">Player</th><th>Gms</th><th>Min</th><th>Avg/Gm</th><th style="width:26%">Share</th></tr></thead><tbody>`;
   state.roster.map(p=>({p,s:stats[p.id]})).sort((a,b)=>a.s.total-b.s.total).forEach(r=>{
-    h+=`<tr><td class="name">${esc(r.p.name)}</td><td>${r.s.games}</td><td><b>${fmt(r.s.total)}</b></td>
+    const avg=r.s.games? r.s.total/r.s.games : 0;
+    h+=`<tr><td class="name">${esc(r.p.name)}</td><td>${r.s.games}</td><td><b>${fmt(r.s.total)}</b></td><td>${r.s.games?fmt(avg):"·"}</td>
       <td><div class="barwrap"><div class="bar" style="width:${Math.round(r.s.total/maxT*100)}%"></div></div></td></tr>`;
   });
   h+=`</tbody></table></div>`;
@@ -1185,7 +1259,96 @@ function renderSeason(){
   state.roster.map(p=>({p,s:stats[p.id]})).sort((a,b)=> (b.s.goals+b.s.assists)-(a.s.goals+a.s.assists) || b.s.goals-a.s.goals)
     .forEach(r=>{ h+=`<tr><td class="name">${esc(r.p.name)}</td><td>${r.s.goals||"·"}</td><td>${r.s.assists||"·"}</td><td><b>${(r.s.goals+r.s.assists)||"·"}</b></td></tr>`; });
   h+=`</tbody></table></div>`;
+  // season export — deliberately separate from the per-game postgame email
+  h+=`<div class="card"><b style="font-size:14px">Send season summary</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">Totals across all ${gamesCount} game${gamesCount>1?"s":""} logged so far — separate from the per-game emails, so it only goes out when you send it.</div>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn wide" onclick="emailSeasonSummary()">✉︎ Email season summary</button>
+    <button class="btn ghost" onclick="copySeasonSummary()">⧉ Copy</button></div>
+    <div class="muted" style="font-size:11.5px;margin-top:9px"><button class="btn ghost sm" style="margin-top:5px" onclick="copySeasonSummaryHTML()">🎨 Copy formatted</button> for a version with a table and colors, to paste into a new email draft.</div></div>`;
   return h;
+}
+function seasonStats(){
+  const stats={}; state.roster.forEach(p=>stats[p.id]={total:0,grp:{GK:0,D:0,M:0,F:0},games:0,goals:0,assists:0});
+  state.games.forEach(g=>{ const mm=gameMinutes(g);
+    (g.present||[]).forEach(pid=>{ if(stats[pid]) stats[pid].games++; });
+    Object.keys(mm).forEach(pid=>{ if(!stats[pid])return; stats[pid].total+=mm[pid].total;
+      GRP_ORDER.forEach(gr=>stats[pid].grp[gr]+=mm[pid].grp[gr]); });
+    (g.goals||[]).forEach(gl=>{ if(gl.scorer&&stats[gl.scorer]) stats[gl.scorer].goals++; if(gl.assist&&stats[gl.assist]) stats[gl.assist].assists++; });
+  });
+  let w=0,l=0,t=0;
+  state.games.forEach(g=>{ if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){ const us=ourScore(g),them=(g.them!==""&&g.them!=null)?+g.them:0; if(us>them)w++;else if(us<them)l++;else t++; } });
+  return {stats, record:{w,l,t}, gamesCount:state.games.length};
+}
+function seasonSummaryText(){
+  const {stats,record,gamesCount}=seasonStats();
+  const DIV="––––––––––––––––––––";
+  const L=[];
+  L.push("⚽ "+(state.settings.teamName||"Team")+" — Season Summary");
+  L.push(gamesCount+" game"+(gamesCount>1?"s":"")+" logged  ·  Record "+record.w+"-"+record.l+"-"+record.t);
+  L.push("");
+  L.push(DIV); L.push("⏱ TOTAL MINUTES  (sorted low → high)"); L.push(DIV);
+  const rows=state.roster.map(p=>({p,s:stats[p.id]})).sort((a,b)=>a.s.total-b.s.total);
+  rows.forEach(r=>{ const avg=r.s.games? r.s.total/r.s.games : 0;
+    L.push(r.p.name+" — "+fmt(r.s.total)+" min over "+r.s.games+" gm"+(r.s.games!==1?"s":"")+(r.s.games?"  ·  "+fmt(avg)+" avg/gm":"")); });
+  L.push(""); L.push(DIV); L.push("📍 MINUTES BY POSITION  (GK / Def / Mid / Fwd)"); L.push(DIV);
+  rows.forEach(r=>{ const gp=r.s.grp; L.push(r.p.name+" — "+fmt(gp.GK||0)+" / "+fmt(gp.D||0)+" / "+fmt(gp.M||0)+" / "+fmt(gp.F||0)); });
+  const scorers=state.roster.map(p=>({p,s:stats[p.id]})).filter(r=>r.s.goals||r.s.assists)
+    .sort((a,b)=>(b.s.goals+b.s.assists)-(a.s.goals+a.s.assists)||b.s.goals-a.s.goals);
+  if(scorers.length){
+    L.push(""); L.push(DIV); L.push("⚽ GOALS & ASSISTS"); L.push(DIV);
+    scorers.forEach(r=>{ L.push(r.p.name+" — "+r.s.goals+" G, "+r.s.assists+" A"); });
+  }
+  return L.join("\n");
+}
+function seasonSummaryHTML(){
+  const {stats,record,gamesCount}=seasonStats();
+  const rows=state.roster.map(p=>({p,s:stats[p.id]})).sort((a,b)=>a.s.total-b.s.total);
+  let h=`<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a2238;max-width:600px">`;
+  h+=`<h2 style="margin:0 0 4px;font-size:20px;color:#13235a">⚽ ${esc(state.settings.teamName||"Team")} — Season Summary</h2>`;
+  h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${gamesCount} game${gamesCount>1?"s":""} logged &nbsp;&middot;&nbsp; Record <b>${record.w}-${record.l}-${record.t}</b></div>`;
+  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Total Minutes <span style="font-weight:400;color:#697089;font-size:12.5px">(sorted low → high)</span></h3>`;
+  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
+  h+=`<tr style="text-align:left;color:#8890a3;font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:5px 8px 5px 0">Player</th><th style="padding:5px 8px">Gms</th><th style="padding:5px 8px">Min</th><th style="padding:5px 0 5px 8px">Avg/Gm</th></tr>`;
+  rows.forEach((r,i)=>{ const avg=r.s.games? r.s.total/r.s.games : 0; const bg=i%2?"#f7f8fb":"#ffffff";
+    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 8px;color:#697089">${r.s.games}</td><td style="padding:6px 8px"><b>${fmt(r.s.total)}</b></td><td style="padding:6px 0 6px 8px;color:#697089">${r.s.games?fmt(avg):"·"}</td></tr>`; });
+  h+=`</table>`;
+  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📍 Minutes by Position <span style="font-weight:400;color:#697089;font-size:12.5px">(GK / Def / Mid / Fwd)</span></h3>`;
+  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
+  rows.forEach((r,i)=>{ const gp=r.s.grp; const bg=i%2?"#f7f8fb":"#ffffff";
+    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 0;color:#697089">${fmt(gp.GK||0)} / ${fmt(gp.D||0)} / ${fmt(gp.M||0)} / ${fmt(gp.F||0)}</td></tr>`; });
+  h+=`</table>`;
+  const scorers=state.roster.map(p=>({p,s:stats[p.id]})).filter(r=>r.s.goals||r.s.assists)
+    .sort((a,b)=>(b.s.goals+b.s.assists)-(a.s.goals+a.s.assists)||b.s.goals-a.s.goals);
+  if(scorers.length){
+    h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⚽ Goals &amp; Assists</h3>`;
+    h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
+    scorers.forEach((r,i)=>{ const bg=i%2?"#f7f8fb":"#ffffff";
+      h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 8px;color:#697089">${r.s.goals} G</td><td style="padding:6px 0;color:#697089">${r.s.assists} A</td></tr>`; });
+    h+=`</table>`;
+  }
+  h+=`</div>`;
+  return h;
+}
+function emailSeasonSummary(){
+  const subj=(state.settings.teamName||"Team")+" – season totals";
+  const body=seasonSummaryText();
+  window.location.href="mailto:?subject="+encodeURIComponent(subj)+"&body="+encodeURIComponent(body);
+}
+function copySeasonSummary(){
+  const txt=seasonSummaryText();
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(()=>alert("Summary copied.")).catch(()=>fallbackCopy(txt)); }
+  else fallbackCopy(txt);
+}
+function copySeasonSummaryHTML(){
+  const html=seasonSummaryHTML(), text=seasonSummaryText();
+  if(navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem!=="undefined"){
+    const item=new ClipboardItem({ "text/html": new Blob([html],{type:"text/html"}), "text/plain": new Blob([text],{type:"text/plain"}) });
+    navigator.clipboard.write([item])
+      .then(()=>alert("Formatted season summary copied — paste it into a new email to keep the table."))
+      .catch(()=>fallbackCopy(text,"Your browser blocked rich copying, so I copied the plain-text version instead."));
+  } else {
+    fallbackCopy(text,"Your browser doesn't support rich copying here, so I copied the plain-text version instead.");
+  }
 }
 
 //// ---------- Roster ----------
