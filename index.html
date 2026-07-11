@@ -60,7 +60,13 @@
   .clockcard.warn .clocktime{color:#c0392b;}
   .clockcard.done{background:#fdecea;border-color:#f0a8a0;}
   .clockcard.done .clocktime{color:#c62828;}
-  input,select{font-size:15px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);width:100%;}
+  /* font-size must be >=16px on all form fields — below that, iOS Safari auto-zooms the whole
+     page when the field is focused, which is what made the date field look like it was
+     "escaping" its card and made the page feel too wide after tapping any input. */
+  input,select{font-size:16px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);width:100%;min-width:0;}
+  /* Reset native appearance only on text-like/date fields — leaves checkboxes/radios (native
+     checkmark would disappear) and selects (native dropdown arrow would disappear) alone. */
+  input:not([type="checkbox"]):not([type="radio"]){-webkit-appearance:none;appearance:none;}
   label.fld{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:10px 0 3px;text-transform:uppercase;letter-spacing:.4px;}
   .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:14px;}
   /* attendance */
@@ -515,7 +521,7 @@ function renderSetup(){
   formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
   h+=`</select>
     <label class="fld">Players — one name per line</label>
-    <textarea id="setupNames" placeholder="Ava&#10;Mia&#10;Sofia&#10;…" style="width:100%;min-height:150px;font-size:15px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical"></textarea>
+    <textarea id="setupNames" placeholder="Ava&#10;Mia&#10;Sofia&#10;…" style="width:100%;min-height:150px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical"></textarea>
     <div class="muted" style="font-size:12.5px;margin:6px 0 10px">You can add jersey numbers and tag keepers later on the Roster tab.</div>
     <button class="btn wide" onclick="createTeam()">Create team</button></div>`;
   return h;
@@ -612,7 +618,7 @@ function renderGame(){
   </div></div>`;
   // notes
   h+=`<h2 class="sec">Game notes</h2><div class="card">
-    <textarea onchange="setGame('notes',this.value)" placeholder="How it went, who stood out, what to work on, injuries… included in your email & backup." style="width:100%;min-height:74px;font-size:14px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc(g.notes||"")}</textarea></div>`;
+    <textarea onchange="setGame('notes',this.value)" placeholder="How it went, who stood out, what to work on, injuries… included in your email & backup." style="width:100%;min-height:74px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc(g.notes||"")}</textarea></div>`;
 
   // quarters
   h+=`<div class="row between" style="margin:16px 2px 6px"><h2 class="sec" style="margin:0">Lineups</h2>
@@ -1408,7 +1414,7 @@ function renderRoster(){
         <div class="nm"><input value="${esc(p.name)}" onchange="renamePlayer('${p.id}',this.value)" style="border:none;padding:6px 2px;font-weight:600"></div>
         <button class="btn sm ${p.gk?'':'ghost'}" onclick="toggleGK('${p.id}')" title="Keeper pool">🧤</button>
         <button class="btn red sm" onclick="removePlayer('${p.id}')">✕</button></div>
-      <input value="${esc(p.notes||"")}" onchange="setNotes('${p.id}',this.value)" placeholder="Notes — e.g. strong CB, avoid ST, still learning left foot" style="width:100%;margin-top:7px;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;color:var(--ink)"></div>`;
+      <input value="${esc(p.notes||"")}" onchange="setNotes('${p.id}',this.value)" placeholder="Notes — e.g. strong CB, avoid ST, still learning left foot" style="width:100%;margin-top:7px;font-size:16px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-family:inherit;color:var(--ink)"></div>`;
   });
   h+=`</div>`;
   h+=`<label class="fld" style="margin-left:2px">Team name</label><input value="${esc(state.settings.teamName||"")}" onchange="setTeam(this.value)" style="margin:0 0 6px">`;
