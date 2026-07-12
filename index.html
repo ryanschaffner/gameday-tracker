@@ -251,18 +251,26 @@ function jerseySVG(grp,label,mode){
 
 //// ---------- State ----------
 const KEY = "soccerGameTrackerV1";
-let state, ui = {view:"games", gameId:null, qi:0};
+// dismissedAlerts / activeSubAlert / _lastAlertKey are sub-timing-alert UI state — intentionally
+// NOT saved to localStorage (see save()); they're a live sideline aid, not game history, and
+// resetting on reload/game-switch is the right behavior.
+let state, ui = {view:"games", gameId:null, qi:0, dismissedAlerts:{}, activeSubAlert:null, _lastAlertKey:undefined};
 
 function blankQuarter(f){ return {formation:f, lineup:{}, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}}; }
 function defaultState(){
-  return { roster:[], games:[], settings:{defaultFormation:"3-3-1", teamName:""} };
+  return { roster:[], games:[], settings:{defaultFormation:"3-3-1", teamName:"", subAlertThreshold:6} };
 }
 function load(){
   try{ const r=localStorage.getItem(KEY); state = r? JSON.parse(r): defaultState(); }
   catch(e){ state = defaultState(); }
-  if(!state.settings) state.settings={defaultFormation:"3-3-1",teamName:""};
-  // migrate older saved games that don't have a clock yet
-  (state.games||[]).forEach(g=>{ (g.quarters||[]).forEach(q=>{ if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0}; }); });
+  if(!state.settings) state.settings={defaultFormation:"3-3-1",teamName:"",subAlertThreshold:6};
+  // migrate older saves missing the sub-alert threshold setting
+  if(state.settings.subAlertThreshold==null) state.settings.subAlertThreshold=6;
+  // migrate older saved games that don't have a clock yet, or an `out` (injured/done-for-the-day) list
+  (state.games||[]).forEach(g=>{
+    (g.quarters||[]).forEach(q=>{ if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0}; });
+    if(!g.out) g.out=[];
+  });
 }
 function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
 function uid(p){ return p+Math.random().toString(36).slice(2,8); }
@@ -308,8 +316,56 @@ function clockMinuteNow(qi){
   const sec=clockElapsedSec(q); if(sec<=0) return null;
   return Math.min(QLEN, Math.round((sec/60)*2)/2);
 }
+//// ---------- Sub-timing alert ----------
+// Two triggers, checked every tick while a quarter's clock is running:
+//  1) named player: any on-field outfield player who's hit `subAlertThreshold` consecutive
+//     minutes (reuses the same consecutiveOutfieldMinutes signal Suggest Subs already relies on).
+//  2) periodic checkpoint: every 5 game-minutes, a generic nudge if nobody's individually over
+//     threshold yet — so you still get a prompt on quarters with lots of rotation already happening.
+// Alerts are keyed so dismissing one doesn't suppress the *next* time the same player crosses
+// another full threshold multiple, and keys are namespaced by game id so switching games can't
+// leak a stale dismissal into a new one.
+function computeSubAlert(){
+  const g=curGame(); if(!g) return null;
+  const qi=ui.qi; const q=g.quarters[qi]; if(!q || !q.clock || !q.clock.running) return null;
+  const sec=clockElapsedSec(q); if(sec<=0) return null;
+  const minute=sec/60;
+  const threshold=Number(state.settings.subAlertThreshold)||6;
+  ui.dismissedAlerts=ui.dismissedAlerts||{};
+  const slots=FORMATIONS[q.formation].slots.filter(s=>s.grp!=="GK");
+  let best=null;
+  slots.forEach(s=>{
+    const pid=slotOccupantAt(q,s.id,minute); if(!pid) return;
+    const mins=consecutiveOutfieldMinutes(pid,qi,minute);
+    if(mins>=threshold){
+      const cycle=Math.floor(mins/threshold);
+      const key="p:"+g.id+":"+qi+":"+pid+":"+cycle;
+      if(!ui.dismissedAlerts[key] && (!best || mins>best.mins)){
+        best={type:"player",key,msg:esc(name(pid))+" has been on <b>"+fmt(mins)+" min</b> straight — consider a sub."};
+      }
+    }
+  });
+  if(best) return best;
+  const CP=5;
+  const cpIdx=Math.floor(minute/CP);
+  if(cpIdx>=1){
+    const key="cp:"+g.id+":"+qi+":"+cpIdx;
+    if(!ui.dismissedAlerts[key]){
+      return {type:"checkpoint",key,msg:fmt(cpIdx*CP)+" min gone in Q"+(qi+1)+" — worth a quick playing-time check."};
+    }
+  }
+  return null;
+}
+function dismissSubAlert(){
+  ui.dismissedAlerts=ui.dismissedAlerts||{};
+  if(ui.activeSubAlert) ui.dismissedAlerts[ui.activeSubAlert.key]=true;
+  ui.activeSubAlert=null; ui._lastAlertKey=undefined;
+  render();
+}
 // Lightweight tick — updates only the visible clock text directly rather than a full render(),
 // so a running clock doesn't interrupt whatever the coach is doing (typing, an open sheet, etc).
+// A full render() only fires when the sub-alert banner actually needs to appear/disappear/change,
+// not on every 500ms tick, for the same reason.
 setInterval(()=>{
   try{
     if(!state || !ui || ui.view!=="game") return;
@@ -319,7 +375,16 @@ setInterval(()=>{
     if(el) el.textContent=clockRemainingLabel(q);
     if(q.clock.running && clockElapsedSec(q)>=QLEN*60){
       q.clock.elapsedMs=QLEN*60*1000; q.clock.running=false; q.clock.startedAt=null;
-      save(); render();
+      save(); render(); return;
+    }
+    const alert=computeSubAlert();
+    const key=alert?alert.key:null;
+    if(key!==ui._lastAlertKey){
+      ui._lastAlertKey=key; ui.activeSubAlert=alert;
+      // Best-effort buzz when a NEW alert appears (not on dismiss/clear). No-op on browsers that
+      // don't support it (notably iOS Safari) — the visible banner is the alert either way.
+      if(alert && navigator.vibrate){ try{ navigator.vibrate(200); }catch(e){} }
+      render();
     }
   }catch(e){}
 }, 500);
@@ -391,12 +456,17 @@ function playerInQuarterMinutes(g,qi,pid){
 // Fair share = all field-minutes (however many are on the field at once × full game) split across
 // everyone present, capped at a full game. Field size follows the formation actually in play
 // (8/7/6), not a hardcoded 8, so smaller-squad games still produce a sane target.
-function fairShare(g){ const N=(g.present||[]).length; if(!N) return 0; const fieldSize=Math.min(N,8); return Math.min(QLEN*4, fieldSize*QLEN*4 / N); }
+// Present players still available to be selected for lineups/subs — everyone checked in EXCEPT
+// anyone marked Injured/Out. `g.present` itself always keeps out-players in it (never remove them
+// there) so their already-logged minutes keep showing in the minutes table, summaries, and season
+// stats. Use this helper anywhere you're building a pool of who CAN still be picked to play.
+function activePresent(g){ const out=g.out||[]; return (g.present||[]).filter(p=>!out.includes(p)); }
+function fairShare(g){ const N=activePresent(g).length; if(!N) return 0; const fieldSize=Math.min(N,8); return Math.min(QLEN*4, fieldSize*QLEN*4 / N); }
 function targetFor(g){ const t=(g.targetMin!=null && g.targetMin!=="")? parseFloat(g.targetMin):NaN; return isNaN(t)? fairShare(g): t; }
 function ptStatus(total,target){ const tol=6; if(total<target-tol) return {k:"short",lbl:"▼ short"}; if(total>target+tol) return {k:"over",lbl:"▲ over"}; return {k:"on",lbl:"✓ on"}; }
 function setTarget(v){ const g=curGame(); g.targetMin=(v===""||v==null)?null:v; save(); render(); }
 //// ---------- Suggest next quarter ----------
-function suggestionFor(qi){ const g=curGame(); const present=(g.present||[]);
+function suggestionFor(qi){ const g=curGame(); const present=activePresent(g);
   if(qi===0) return present.slice(); // Q1: by arrival order
   const prior={}; present.forEach(p=>prior[p]=0);
   for(let i=0;i<qi;i++){ quarterStints(g.quarters[i]).forEach(st=>{ if(prior[st.pid]!=null) prior[st.pid]+=st.min; }); }
@@ -407,17 +477,17 @@ function applySuggestion(qi){ if(qi===0) autoFill(qi); else suggestBalance(qi); 
 function setKeeper(half,v){ const g=curGame(); g.keepers=g.keepers||{h1:null,h2:null}; g.keepers[half]=v||null; save(); render(); }
 function keeperOptions(g,half){ const sel=(g.keepers&&g.keepers[half])||"";
   let o=`<option value="">— auto —</option>`;
-  (g.present||[]).forEach(pid=>{ o+=`<option value="${pid}" ${sel===pid?"selected":""}>${esc(name(pid))}${isGK(pid)?" 🧤":""}</option>`; });
+  activePresent(g).forEach(pid=>{ o+=`<option value="${pid}" ${sel===pid?"selected":""}>${esc(name(pid))}${isGK(pid)?" 🧤":""}</option>`; });
   return o; }
 // The keeper for a given quarter: explicit half-keeper → Keep-GK continuity → keeper pool → none.
 function keeperForQuarter(qi){ const g=curGame(); const k=g.keepers||{};
   const who=qi<2?k.h1:k.h2;
-  if(who && (g.present||[]).includes(who)) return who;
+  if(who && activePresent(g).includes(who)) return who;
   return null;
 }
 //// ---------- Whole-game auto-rotation ----------
 function autoRotateGame(){
-  const g=curGame(); const present=(g.present||[]).slice(); const N=present.length;
+  const g=curGame(); const present=activePresent(g); const N=present.length;
   if(!N){ alert("Check players in first."); return; }
   const fit=bestFormationFor(N);
   if(N<6){ if(!confirm("Only "+N+" present (need at least 6 for a full side). Plan all 4 quarters anyway with some open spots?")) return; }
@@ -508,7 +578,7 @@ function render(){
   document.getElementById("hdr-sub").textContent="8v8 · 4 × 12 min";
 }
 function go(v){ ui.view=v; ui.gameId=null; render(); window.scrollTo(0,0); }
-function openGame(id){ ui.gameId=id; ui.view="game"; ui.qi=0; render(); window.scrollTo(0,0); }
+function openGame(id){ ui.gameId=id; ui.view="game"; ui.qi=0; ui.activeSubAlert=null; ui._lastAlertKey=undefined; render(); window.scrollTo(0,0); }
 
 //// ---------- Games list ----------
 function renderSetup(){
@@ -556,7 +626,7 @@ function renderGames(){
 }
 function newGame(){
   const today=new Date().toISOString().slice(0,10);
-  const g={id:uid("g"),date:today,opp:"",us:"",them:"",present:[],keepGK:true,keepers:{h1:null,h2:null},goals:[],
+  const g={id:uid("g"),date:today,opp:"",us:"",them:"",present:[],out:[],keepGK:true,keepers:{h1:null,h2:null},goals:[],
     quarters:[0,1,2,3].map(()=>blankQuarter(state.settings.defaultFormation))};
   state.games.push(g); save(); openGame(g.id);
 }
@@ -565,7 +635,8 @@ function deleteGame(id){ if(!confirm("Delete this game and its data?"))return; s
 //// ---------- Game view ----------
 function renderGame(){
   const g=curGame(); if(!g){ go("games"); return ""; }
-  const present=g.present||[];
+  const present=g.present||[]; // everyone checked in today, including anyone since marked Injured/Out
+  const activeP=activePresent(g); // checked in AND still eligible to be picked for lineups/subs
   let h=`<div class="row between" style="margin:2px"><button class="btn ghost sm" onclick="go('games')">‹ Games</button>
     <button class="btn red sm" onclick="deleteGame('${g.id}')">Delete</button></div>`;
   // game info
@@ -593,13 +664,24 @@ function renderGame(){
 
   // attendance
   h+=`<h2 class="sec">Check-in · tap in arrival order</h2><div class="card">`;
-  if(present.length){
+  const mmAtt=gameMinutes(g);
+  if(activeP.length){
     h+=`<div class="muted" style="font-size:12.5px;margin-bottom:4px">On the field, first arrivals start. Order shown at left.</div>`;
-    present.forEach((pid,i)=>{
+    activeP.forEach((pid,i)=>{
+      const played=((mmAtt[pid]||{}).total||0)>0;
       h+=`<div class="pl"><div class="ord">${i+1}</div><div class="nm">${esc(name(pid))}${isGK(pid)?'<span class="gkbadge">🧤 GK</span>':''}</div>
-        <button class="btn ghost sm" onclick="toggleAttend('${pid}')">Out</button></div>`;
+        <button class="btn ghost sm" onclick="toggleAttend('${pid}')">${played?"Injured/Out":"Out"}</button></div>`;
     });
   } else h+=`<div class="muted" style="font-size:14px">No one checked in yet. Tap players below as they arrive.</div>`;
+  if((g.out||[]).length){
+    h+=`<div class="ltlabel" style="margin-top:10px">Injured / out for today (${g.out.length})</div>`;
+    h+=`<div class="muted" style="font-size:11.5px;margin:2px 0 4px">Minutes they already played still count — they're just out of the pool for future quarters.</div>`;
+    g.out.forEach(pid=>{
+      const mins=(mmAtt[pid]||{}).total||0;
+      h+=`<div class="pl absent"><div class="ord off">🚑</div><div class="nm">${esc(name(pid))} <span class="muted" style="font-size:12px">· ${fmt(mins)} min played</span></div>
+        <button class="btn sm" onclick="setPlayerOut('${pid}',false)">Reactivate</button></div>`;
+    });
+  }
   const absent=state.roster.filter(p=>!present.includes(p.id));
   if(absent.length){
     h+=`<div style="margin-top:8px">`;
@@ -644,14 +726,24 @@ function renderGame(){
     </div>
     <div class="muted" style="font-size:11.5px;margin-top:4px">Q${ui.qi+1} clock · ${fmt(QLEN)} min. Sub times below default to whatever this shows when you log them.</div>
   </div>`;
+  // sub-timing alert — shows only while this quarter's clock is running and a threshold's been crossed
+  if(ui.activeSubAlert){
+    const sa=ui.activeSubAlert;
+    h+=`<div class="suggest" style="border-color:#f0b429;background:#fff8e6">
+      <b>⏱ ${sa.type==="player"?"Sub check":"Checkpoint"}</b> — ${sa.msg}
+      <div class="row" style="margin-top:8px;gap:8px">
+        <button class="btn sm" onclick="openSuggestSubs(${ui.qi})">✨ Suggest subs</button>
+        <button class="btn ghost sm" onclick="dismissSubAlert()">Dismiss</button>
+      </div></div>`;
+  }
   h+=`<div class="card">`;
   h+=`<div class="row between"><label class="fld" style="margin:0">Formation</label>
     <select style="width:auto" onchange="setFormation(${ui.qi},this.value)">`;
   Object.keys(FORMATIONS).forEach(f=>{ h+=`<option value="${f}" ${q.formation===f?'selected':''}>${FORMATIONS[f].label}</option>`; });
   h+=`</select></div>`;
-  if(!present.length){ h+=`<div class="note">Check players in above, then tap a position to assign someone.</div>`; }
+  if(!activeP.length){ h+=`<div class="note">Check players in above, then tap a position to assign someone.</div>`; }
   // suggest-next-quarter prompt (shown when this quarter isn't set yet)
-  if(present.length && Object.values(q.lineup).filter(Boolean).length===0){
+  if(activeP.length && Object.values(q.lineup).filter(Boolean).length===0){
     const sug=suggestionFor(ui.qi).slice(0,8).map(p=>esc(firstName(name(p)))).join(", ");
     h+=`<div class="suggest"><b>Q${ui.qi+1} isn't set yet.</b> ${ui.qi===0?"Suggested starters by arrival order:":"Lowest minutes so far — suggested to start:"} ${sug}.
       <div style="margin-top:8px"><button class="btn sm" onclick="applySuggestion(${ui.qi})">${ui.qi===0?"Apply by arrival":"Apply balanced lineup"}</button></div></div>`;
@@ -686,7 +778,7 @@ function renderGame(){
   h+=`<div class="muted" style="font-size:11.5px;margin-top:3px">Drag a bench chip or a player onto a spot to set the lineup · tap a spot to pick · <span style="color:var(--f);font-weight:700">OPEN</span> = vacated by a move, fill it with a sub.</div>`;
   // bench
   const onField=Object.values(q.lineup).filter(Boolean);
-  const bench=present.filter(p=>!onField.includes(p));
+  const bench=activeP.filter(p=>!onField.includes(p));
   h+=`<div class="ltools">`;
   h+=`<div class="ltlabel">Fill the lineup</div>`;
   h+=`<div class="fillgrid">
@@ -708,7 +800,7 @@ function renderGame(){
   h+=`</div>`;
   // unassigned warning
   const emptySlots=FORMATIONS[q.formation].slots.filter(s=>!q.lineup[s.id]).length;
-  if(present.length && emptySlots>0) h+=`<div class="bench"><span class="chip warn">${emptySlots} open position${emptySlots>1?"s":""}</span></div>`;
+  if(activeP.length && emptySlots>0) h+=`<div class="bench"><span class="chip warn">${emptySlots} open position${emptySlots>1?"s":""}</span></div>`;
 
   // Q2 / Q4 mid-half rotation prompt (parity + rest)
   if((ui.qi===1||ui.qi===3) && bench.length && Object.values(q.lineup).filter(Boolean).length){
@@ -734,7 +826,7 @@ function renderGame(){
     <div class="muted" style="font-size:11.5px;margin:3px 0 6px">Tap an on-field player who looks tired — Suggest subs will bring them off first.</div>
     <div class="bench" style="margin-top:2px">`;
   const qm={}; quarterStints(q).forEach(st=>{ qm[st.pid]=(qm[st.pid]||0)+st.min; });
-  present.forEach(pid=>{
+  activeP.forEach(pid=>{
     const v=qm[pid]||0;
     const onSlot=FORMATIONS[q.formation].slots.find(s=>slotOccupantAt(q,s.id,QLEN)===pid);
     const canFlag=onSlot && onSlot.grp!=="GK";
@@ -905,17 +997,42 @@ function afterGameRender(){}
 
 //// ---------- Game mutations ----------
 function setGame(k,v){ const g=curGame(); g[k]=v; save(); if(k==="opp"||k==="date"){} }
-function setQ(i){ ui.qi=i; render(); }
-function toggleAttend(pid){ const g=curGame(); g.present=g.present||[];
+function setQ(i){ ui.qi=i; ui.activeSubAlert=null; ui._lastAlertKey=undefined; render(); }
+function toggleAttend(pid){ const g=curGame(); g.present=g.present||[]; g.out=g.out||[];
   const i=g.present.indexOf(pid);
-  if(i>=0){ g.present.splice(i,1); // also remove from lineups/subs
+  if(i>=0){
+    // Already checked in and being un-checked. If they've already logged any minutes this game,
+    // fully removing them here would silently delete that history from past quarters' lineup/sub
+    // data. Route through the safe Injured/Out path instead — it keeps them present (so their
+    // minutes keep showing everywhere) but drops them from future selection.
+    const played=((gameMinutes(g)[pid]||{}).total||0) > 0;
+    if(played){ setPlayerOut(pid,true); return; }
+    g.present.splice(i,1); // nothing played yet — safe to fully remove (e.g. correcting a mis-tap)
     g.quarters.forEach(q=>{ Object.keys(q.lineup).forEach(s=>{ if(q.lineup[s]===pid) delete q.lineup[s]; });
       q.subs=(q.subs||[]).filter(x=>x.on!==pid); });
     clearTired(pid);
-  } else g.present.push(pid);
+  } else {
+    const oi=g.out.indexOf(pid); if(oi>=0) g.out.splice(oi,1); // re-checking in clears any stale Out flag
+    g.present.push(pid);
+  }
   // For any quarter nobody's touched yet (empty lineup, no subs), keep its formation matched to
-  // how many are actually present today — nothing to lose since there's no lineup to clear.
-  const fit=bestFormationFor(g.present.length);
+  // how many are actually active present today — nothing to lose since there's no lineup to clear.
+  const fit=bestFormationFor(activePresent(g).length);
+  g.quarters.forEach(q=>{ if(!Object.keys(q.lineup).length && !(q.subs||[]).length) q.formation=fit; });
+  save(); render();
+}
+// Marks a checked-in player Injured/Out (out=true) or reactivates them (out=false). Unlike
+// toggleAttend's removal path, this NEVER touches q.lineup/q.subs — past quarters they already
+// played keep their minutes intact in the minutes table, summaries, and season stats. It only
+// takes them out of the pool used for picking future lineups/subs/keepers (see activePresent()).
+function setPlayerOut(pid,out){
+  const g=curGame(); g.out=g.out||[]; g.present=g.present||[];
+  if(!g.present.includes(pid)) return; // must already be checked in
+  const i=g.out.indexOf(pid);
+  if(out && i<0) g.out.push(pid);
+  if(!out && i>=0) g.out.splice(i,1);
+  if(out) clearTired(pid);
+  const fit=bestFormationFor(activePresent(g).length);
   g.quarters.forEach(q=>{ if(!Object.keys(q.lineup).length && !(q.subs||[]).length) q.formation=fit; });
   save(); render();
 }
@@ -927,11 +1044,11 @@ function setFormation(qi,f){ const g=curGame(); const q=g.quarters[qi];
 }
 // ---- Keeper pool ----
 function isGK(pid){ const p=state.roster.find(x=>x.id===pid); return !!(p&&p.gk); }
-function gkPoolPresent(){ const g=curGame(); return (g.present||[]).filter(isGK); }
+function gkPoolPresent(){ const g=curGame(); return activePresent(g).filter(isGK); }
 // Returns the keeper to lock for this quarter (prev quarter's GK if keeping, else a rotating pool keeper), or null
 function keepGKFor(qi){ const g=curGame(); if(g.keepGK===false || qi<1) return null;
   const gk=slotOccupantAt(g.quarters[qi-1],"gk",QLEN);
-  return (gk && (g.present||[]).includes(gk)) ? gk : null;
+  return (gk && activePresent(g).includes(gk)) ? gk : null;
 }
 function gkForFill(qi){ const ex=keeperForQuarter(qi); if(ex) return ex;
   const k=keepGKFor(qi); if(k) return k;
@@ -941,14 +1058,14 @@ function setKeepGK(v){ const g=curGame(); g.keepGK=v; save(); }
 function autoFill(qi){ const g=curGame(); const q=g.quarters[qi];
   const slots=FORMATIONS[q.formation].slots;
   q.lineup={};
-  let pool=(g.present||[]).slice(), fillSlots=slots.slice();
+  let pool=activePresent(g), fillSlots=slots.slice();
   const gk=gkForFill(qi);
   if(gk){ q.lineup["gk"]=gk; pool=pool.filter(p=>p!==gk); fillSlots=fillSlots.filter(s=>s.id!=="gk"); }
   pool.slice(0,fillSlots.length).forEach((pid,i)=>{ q.lineup[fillSlots[i].id]=pid; });
   save(); render();
 }
 function suggestBalance(qi){ const g=curGame(); const q=g.quarters[qi];
-  const slots=FORMATIONS[q.formation].slots; const present=g.present||[];
+  const slots=FORMATIONS[q.formation].slots; const present=activePresent(g);
   if(!present.length){ alert("Check players in first."); return; }
   // minutes each present player has so far in earlier quarters this game
   const prior={}; present.forEach(p=>prior[p]=0);
@@ -986,7 +1103,7 @@ function rotateAreas(qi){
     // different from whoever Carry over left in goal), swap them onto the field instead of
     // letting the outgoing keeper quietly fall off the lineup, then rotate the outfield as usual.
     const outSlots=formation.slots.filter(s=>s.grp!=="GK");
-    let pool=(g.present||[]).slice().filter(p=>p!==gk);
+    let pool=activePresent(g).filter(p=>p!==gk);
     let current=outSlots.map(s=>q.lineup[s.id]||null);
     if(priorGk && priorGk!==gk){
       const idx=current.indexOf(gk);
@@ -1009,7 +1126,7 @@ function rotateAreas(qi){
   // keeper tagged in the pool) — treat goal as just another rotating area so it's never left
   // empty and whoever was in goal always lands somewhere real on the field.
   const allSlots=formation.slots; // ordered GK, then D-block, then M-block, then F-block
-  let pool=(g.present||[]).slice();
+  let pool=activePresent(g);
   let current=allSlots.map(s=>q.lineup[s.id]||null);
   const used=new Set(current.filter(Boolean));
   const spare=pool.filter(p=>!used.has(p));
@@ -1037,7 +1154,8 @@ function openPicker(qi,slot){
   const onField=Object.values(q.lineup).filter(Boolean);
   let h=`<h3>${sObj.pos} · ${GRP_LABEL[sObj.grp]}</h3>`;
   h+=`<div class="muted" style="font-size:12.5px;margin-bottom:6px">Choose who starts the quarter here. ✓ = already on the field.</div>`;
-  (g.present||[]).forEach((pid,i)=>{
+  const pickPool=activePresent(g);
+  pickPool.forEach((pid,i)=>{
     const used=onField.includes(pid)&&q.lineup[slot]!==pid;
     const here=q.lineup[slot]===pid;
     const rp=state.roster.find(x=>x.id===pid);
@@ -1046,7 +1164,7 @@ function openPicker(qi,slot){
       <span class="ord">${i+1}</span><div style="flex:1"><div>${esc(name(pid))}</div>${noteHtml}</div>
       ${here?'<span class="pill">starting here</span>':(used?'<span class="muted" style="font-size:12px">✓ on field</span>':'')}</div>`;
   });
-  if(!(g.present||[]).length) h+=`<div class="muted">No one is checked in yet.</div>`;
+  if(!pickPool.length) h+=`<div class="muted">No one is checked in yet.</div>`;
   if(q.lineup[slot]) h+=`<div class="pickrow clear" onclick="assignSlot(${qi},'${slot}','')">Clear this position</div>`;
   h+=`<button class="btn ghost wide" style="margin-top:8px" onclick="closeSheet()">Cancel</button>`;
   showSheet(h);
@@ -1060,8 +1178,9 @@ function openSub(qi){
   slots.forEach(s=>{ const cur=q.lineup[s.id]; h+=`<option value="${s.id}">${s.pos} — ${cur?esc(name(cur)):"(empty)"}</option>`; });
   h+=`</select>`;
   h+=`<label class="fld">Minute of the sub</label><input id="subMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}">`;
-  const benchP=[], fieldP=[];
-  (g.present||[]).forEach(pid=>{ const sl=occupantSlotOf(q,pid,QLEN); if(sl) fieldP.push({pid,sl}); else benchP.push(pid); });
+  const benchP=[], fieldP=[]; const activeSet=new Set(activePresent(g));
+  (g.present||[]).forEach(pid=>{ const sl=occupantSlotOf(q,pid,QLEN);
+    if(sl) fieldP.push({pid,sl}); else if(activeSet.has(pid)) benchP.push(pid); });
   h+=`<label class="fld">Player coming on</label><select id="subOn">`;
   if(benchP.length){ h+=`<optgroup label="◦ Bench — available">`;
     benchP.forEach(pid=>h+=`<option value="${pid}">${esc(name(pid))}</option>`); h+=`</optgroup>`; }
@@ -1097,7 +1216,7 @@ function saveSub(qi){
 }
 // ---- Full-bench (mass) sub ----
 function openMassSub(qi){
-  const g=curGame(); const q=g.quarters[qi]; const present=g.present||[];
+  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g);
   const slots=FORMATIONS[q.formation].slots;
   const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
   const benchNow=present.filter(p=>!onField.some(f=>f.pid===p));
@@ -1117,7 +1236,7 @@ function openMassSub(qi){
   document.getElementById("msKeepGk").addEventListener("change",()=>renderMassPreview(qi));
 }
 function massPairs(qi){
-  const g=curGame(); const q=g.quarters[qi]; const present=g.present||[];
+  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g);
   const slots=FORMATIONS[q.formation].slots;
   const keepGk=document.getElementById("msKeepGk")? document.getElementById("msKeepGk").checked : true;
   const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
@@ -1188,7 +1307,7 @@ function consecutiveOutfieldMinutes(pid,qi,atMinute){
 // Priority 2 (fallback, nobody flagged): whoever has the longest unbroken stretch on the field,
 // not counting goalie minutes. Paired with the lowest-total-minutes bench players (fairest to bring on).
 function suggestSubPairs(qi,minute){
-  const g=curGame(); const q=g.quarters[qi]; const present=g.present||[];
+  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g);
   const slots=FORMATIONS[q.formation].slots;
   // total minutes played so far under the current plan — used to pick who comes ON (fairness)
   const proj={}; present.forEach(p=>proj[p]=0);
@@ -1421,8 +1540,14 @@ function renderRoster(){
   h+=`<label class="fld" style="margin-left:2px">Default formation for new games</label><select onchange="setDefFormation(this.value)">`;
   formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
   h+=`</select>`;
+  h+=`<label class="fld" style="margin-left:2px">Sub-timing alert threshold</label>
+    <div class="row" style="gap:8px;align-items:center">
+      <input type="number" inputmode="numeric" min="1" max="${QLEN}" step="1" style="width:64px" value="${state.settings.subAlertThreshold??6}" onchange="setSubAlertThreshold(this.value)">
+      <span class="muted" style="font-size:12.5px">min straight on the field before a live game view flags that player</span>
+    </div>`;
   return h;
 }
+function setSubAlertThreshold(v){ const n=Math.max(1,Math.min(QLEN,parseFloat(v)||6)); state.settings.subAlertThreshold=n; save(); render(); }
 function addPlayer(){ state.roster.push({id:uid("p"),name:"New player",gk:false,notes:""}); save(); render(); }
 function toggleGK(id){ const p=state.roster.find(x=>x.id===id); if(p){ p.gk=!p.gk; save(); render(); } }
 function setNumber(id,v){ const p=state.roster.find(x=>x.id===id); if(p){ p.number=(v===""||v==null)?null:String(v).trim(); save(); render(); } }
