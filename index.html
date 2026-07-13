@@ -617,12 +617,42 @@ function autoRotateGame(){
   protectKeepers(g,present,keeperByQ);  // and make sure keepers aren't the ones stuck playing a full game
   ui.qi=0; save(); render();
 }
-// Move a keeper's outfield time to a rested, lower-total bench player so keepers don't play the whole game.
+// Every keeper's outfield slots across the game's non-keeper quarters.
+function keeperOutfieldSlots(g,kp,keeperByQ){
+  const out=[];
+  for(let qi=0;qi<4;qi++){
+    if(keeperByQ[qi]===kp) continue; // this is a quarter they're in goal, not outfield
+    const slots=FORMATIONS[g.quarters[qi].formation].slots;
+    slots.forEach(s=>{ if(s.id!=="gk" && g.quarters[qi].lineup[s.id]===kp) out.push({qi,slot:s.id}); });
+  }
+  return out;
+}
+// Keepers should always get some real field time — playing a full half in goal shouldn't mean
+// zero outfield minutes for the game. This: (1) guarantees at least one outfield slot for any
+// keeper who currently has none, by bumping whoever has the highest total in a non-keeper
+// quarter; then (2) rebalances a keeper's EXTRA outfield time toward rested bench players (same
+// as before), but never touches their last remaining slot — that floor is protected.
 function protectKeepers(g,present,keeperByQ){
   const keepers=[...new Set(keeperByQ.filter(Boolean))];
+  keepers.forEach(kp=>{
+    if(keeperOutfieldSlots(g,kp,keeperByQ).length) return; // already has at least one — nothing to guarantee
+    const t=autoTotals(g,present);
+    let bestQ=-1, bestSlot=null, bestOccTotal=-1;
+    for(let qi=0;qi<4;qi++){
+      if(keeperByQ[qi]===kp) continue;
+      FORMATIONS[g.quarters[qi].formation].slots.forEach(s=>{
+        if(s.id==="gk") return;
+        const occ=g.quarters[qi].lineup[s.id];
+        if(!occ || occ===keeperByQ[qi]) return;
+        if((t[occ]||0)>bestOccTotal){ bestOccTotal=t[occ]||0; bestQ=qi; bestSlot=s.id; }
+      });
+    }
+    if(bestQ>=0) g.quarters[bestQ].lineup[bestSlot]=kp; // give the keeper the busiest player's spot
+  });
   for(let iter=0;iter<300;iter++){
     const t=autoTotals(g,present); let moved=false;
     for(const kp of keepers){
+      if(keeperOutfieldSlots(g,kp,keeperByQ).length<=1) continue; // never take away their last outfield slot
       for(let q=0;q<4 && !moved;q++){
         if(keeperByQ[q]===kp) continue;                 // this is a quarter the keeper is in goal — leave it
         const slots=FORMATIONS[g.quarters[q].formation].slots;
