@@ -1223,6 +1223,8 @@ function gameSummaryHTML(g){
   sub.push("Target "+fmt(target)+" min/player");
   h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${sub.join(" &nbsp;&middot;&nbsp; ")}</div>`;
 
+  if(g.notes) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📝 Notes</h3><div style="font-size:13.5px;white-space:pre-wrap;margin-bottom:8px">${esc(g.notes)}</div>`;
+
   h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(QLEN*4)} min)</span></h3>`;
   // Legend + player rows below use tables/margins instead of flexbox — pasting into Gmail/Apple
   // Mail/Notes strips align-items, justify-content and gap (that's what squashed the swatches
@@ -1268,13 +1270,6 @@ function gameSummaryHTML(g){
     h+=`</ul>`;
   }
 
-  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📍 Position Minutes <span style="font-weight:400;color:#697089;font-size:12.5px">(GK / Def / Mid / Fwd)</span></h3>`;
-  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
-  list.forEach((r,i)=>{ const gp=r.m.grp; const bg=i%2?"#f7f8fb":"#ffffff";
-    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(name(r.pid))}</td><td style="padding:6px 0;color:#697089">${fmt(gp.GK||0)} / ${fmt(gp.D||0)} / ${fmt(gp.M||0)} / ${fmt(gp.F||0)}</td></tr>`; });
-  h+=`</table>`;
-
-  if(g.notes) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📝 Notes</h3><div style="font-size:13.5px;white-space:pre-wrap">${esc(g.notes)}</div>`;
   h+=`</div>`;
   return h;
 }
