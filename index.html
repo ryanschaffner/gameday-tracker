@@ -1224,15 +1224,15 @@ function gameSummaryHTML(g){
   h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${sub.join(" &nbsp;&middot;&nbsp; ")}</div>`;
 
   h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(QLEN*4)} min)</span></h3>`;
-  h+=`<div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap;font-size:12px;font-weight:700;color:#697089;margin:2px 2px 12px">
-    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.GK}"></i>GK</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.D}"></i>Def</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.M}"></i>Mid</span>
-    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.F}"></i>Fwd</span>
-    <span style="opacity:.45">|</span><span>${fmt(target)}' target</span></div>`;
+  // Legend + player rows below use tables/margins instead of flexbox — pasting into Gmail/Apple
+  // Mail/Notes strips align-items, justify-content and gap (that's what squashed the swatches
+  // together and left jersey numbers pinned top-left last time), so spacing here comes from plain
+  // margins and centering comes from table valign/align, neither of which get stripped.
+  const swatch=(color,label,last)=>`<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${color};vertical-align:middle;margin-right:5px"></span><span style="vertical-align:middle;${last?"":"margin-right:14px"}">${label}</span>`;
+  h+=`<div style="font-size:12px;font-weight:700;color:#697089;margin:2px 2px 12px">
+    ${swatch(GRP_COLOR.GK,"GK")}${swatch(GRP_COLOR.D,"Def")}${swatch(GRP_COLOR.M,"Mid")}${swatch(GRP_COLOR.F,"Fwd")}<span style="color:#c7cbd6;margin-right:14px">|</span><span>${fmt(target)}' target</span></div>`;
   const scaleMax=Math.max(target*1.4, ...list.map(r=>r.m.total), 1);
   const tickPct=Math.min(100, target/scaleMax*100);
-  h+=`<div style="margin-bottom:8px">`;
   list.forEach((r,i)=>{
     const keeper=isGK(r.pid);
     const grp=keeper?"GK":dominantGroup(r.m.grp);
@@ -1242,19 +1242,22 @@ function gameSummaryHTML(g){
       : (d=>`<span style="font-size:12px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;background:${BG[d.k]};color:${COLOR[d.k]}">${esc(d.txt)}</span>`)(ptDiff(r.m.total,target));
     const qs=`Q1 ${fmt(r.m.q[0])}' · Q2 ${fmt(r.m.q[1])}' · Q3 ${fmt(r.m.q[2])}' · Q4 ${fmt(r.m.q[3])}'`;
     const borderStyle=i<list.length-1?"border-bottom:1px solid #e3e7f0;":"";
-    h+=`<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 2px;${borderStyle}">
-      <div style="width:38px;height:38px;border-radius:50%;background:${keeper?'#2f6fb0':'#13235a'};color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex:0 0 auto">${esc(jerseyLabel(r.pid))}</div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-          <span style="font-weight:700;font-size:15px;color:#1a2238">${esc(name(r.pid))}${keeper?'<span style="font-size:10.5px;font-weight:800;color:#2f6fb0;margin-left:5px">GK</span>':''}</span>
-          <span style="display:flex;align-items:center;gap:8px;flex:0 0 auto"><span style="font-weight:800;font-size:16px;color:${color}">${fmt(r.m.total)}'</span>${pill}</span>
-        </div>
+    h+=`<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse"><tr>
+      <td valign="top" align="center" style="width:50px;padding:12px 12px 12px 2px;${borderStyle}">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:38px"><tr>
+          <td align="center" valign="middle" style="width:38px;height:38px;line-height:38px;border-radius:50%;background:${keeper?'#2f6fb0':'#13235a'};color:#fff;font-weight:800;font-size:14px;text-align:center">${esc(jerseyLabel(r.pid))}</td>
+        </tr></table>
+      </td>
+      <td valign="top" style="padding:12px 2px 12px 0;${borderStyle}">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+          <td align="left" style="font-weight:700;font-size:15px;color:#1a2238">${esc(name(r.pid))}${keeper?'<span style="font-size:10.5px;font-weight:800;color:#2f6fb0;margin-left:5px">GK</span>':''}</td>
+          <td align="right" style="white-space:nowrap"><span style="font-weight:800;font-size:16px;color:${color};margin-right:8px">${fmt(r.m.total)}'</span>${pill}</td>
+        </tr></table>
         <div style="margin-top:7px;border-radius:5px;overflow:hidden;background:#eef1f8">${mtBarCellsEmail(r.m.grp,scaleMax,keeper?null:tickPct)}</div>
         <div style="font-size:11px;color:#697089;margin-top:5px">${qs}</div>
-      </div>
-    </div>`;
+      </td>
+    </tr></table>`;
   });
-  h+=`</div>`;
   const short=list.filter(r=>!isGK(r.pid)&&ptStatus(r.m.total,target).k==="short").map(r=>esc(name(r.pid)));
   if(short.length) h+=`<div style="font-size:13px;color:#c0392b;margin-bottom:6px"><b>Below target:</b> ${short.join(", ")}</div>`;
 
