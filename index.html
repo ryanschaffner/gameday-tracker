@@ -1170,6 +1170,43 @@ function copySummary(id){ const g=state.games.find(x=>x.id===id); if(!g)return;
 // Rich-text version for pasting into an email draft (mailto links can never carry HTML — every
 // mail app treats the body as plain text — so this copies real HTML to the clipboard instead,
 // which Gmail/Apple Mail/Outlook compose windows render with formatting intact when pasted).
+// The "Playing Time" block below is written with fully inline styles (no CSS classes/vars) so it
+// still renders correctly once pasted, but it deliberately mirrors the in-app minutes-tracker card
+// (mt-row/mt-badge/mt-bar in the <style> block above + renderGameMinutes()) — jersey badge, name,
+// minutes colored by dominant position group, a status pill, a segmented time-by-line bar, and the
+// per-quarter breakdown underneath — so the emailed summary looks like the app, not a plain table.
+// The in-app bar uses position:absolute segments (fine on a real page), but rich-text paste targets
+// (Gmail compose, Apple Mail, Notes, Docs) strip position/top/left from pasted HTML, which made the
+// bar disappear entirely. This builds the same left-to-right breakdown — plus the target tick — as
+// a single row of <td> cells instead, which survives clipboard sanitizing because only width/
+// background survive, and those are enough.
+function mtBarCellsEmail(grpMinutes, scaleMax, tickPct){
+  let segs=[], left=0;
+  GRP_ORDER.forEach(k=>{
+    const min=(grpMinutes&&grpMinutes[k])||0;
+    if(min<=0) return;
+    const w=Math.max(0, min/scaleMax*100);
+    segs.push({start:left, end:left+w, color:GRP_COLOR[k]});
+    left+=w;
+  });
+  if(left<99.7) segs.push({start:left, end:100, color:"#eef1f8"});
+  if(!segs.length) segs=[{start:0,end:100,color:"#eef1f8"}];
+  let cells=[];
+  if(tickPct!=null && tickPct>0.3 && tickPct<99.7){
+    segs.forEach(s=>{
+      if(tickPct>s.start && tickPct<s.end){
+        cells.push({pct:tickPct-s.start, color:s.color});
+        cells.push({tick:true, color:"#1a2238"});
+        cells.push({pct:s.end-tickPct, color:s.color});
+      } else cells.push({pct:s.end-s.start, color:s.color});
+    });
+  } else segs.forEach(s=>cells.push({pct:s.end-s.start, color:s.color}));
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse"><tr>`+
+    cells.map(c=>c.tick
+      ? `<td width="2" style="width:2px;height:8px;line-height:8px;font-size:0;background:${c.color};opacity:.5">&nbsp;</td>`
+      : `<td style="width:${c.pct}%;height:8px;line-height:8px;font-size:0;background:${c.color}">&nbsp;</td>`).join("")+
+    `</tr></table>`;
+}
 function gameSummaryHTML(g){
   const mm=gameMinutes(g); const present=g.present||[]; const target=targetFor(g);
   const COLOR={on:"#1b7a3d",short:"#c0392b",over:"#a05a00"};
@@ -1187,17 +1224,38 @@ function gameSummaryHTML(g){
   h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${sub.join(" &nbsp;&middot;&nbsp; ")}</div>`;
 
   h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(QLEN*4)} min)</span></h3>`;
-  h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
-  h+=`<tr style="text-align:left;color:#8890a3;font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:5px 8px 5px 0">Player</th><th style="padding:5px 8px">Min</th><th style="padding:5px 8px">Status</th><th style="padding:5px 0 5px 8px">By quarter</th></tr>`;
+  h+=`<div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap;font-size:12px;font-weight:700;color:#697089;margin:2px 2px 12px">
+    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.GK}"></i>GK</span>
+    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.D}"></i>Def</span>
+    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.M}"></i>Mid</span>
+    <span style="display:inline-flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:3px;display:inline-block;background:${GRP_COLOR.F}"></i>Fwd</span>
+    <span style="opacity:.45">|</span><span>${fmt(target)}' target</span></div>`;
+  const scaleMax=Math.max(target*1.4, ...list.map(r=>r.m.total), 1);
+  const tickPct=Math.min(100, target/scaleMax*100);
+  h+=`<div style="margin-bottom:8px">`;
   list.forEach((r,i)=>{
-    const qs=r.m.q.map(x=>fmt(x)||"0").join(" / "); const st=ptStatus(r.m.total,target); const bg=i%2?"#f7f8fb":"#ffffff";
-    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(name(r.pid))}</td>`+
-       `<td style="padding:6px 8px">${fmt(r.m.total)}</td>`+
-       `<td style="padding:6px 8px"><span style="background:${BG[st.k]};color:${COLOR[st.k]};padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700;white-space:nowrap">${st.lbl}</span></td>`+
-       `<td style="padding:6px 0 6px 8px;color:#697089">${qs}</td></tr>`;
+    const keeper=isGK(r.pid);
+    const grp=keeper?"GK":dominantGroup(r.m.grp);
+    const color=GRP_COLOR[grp];
+    const pill=keeper
+      ? `<span style="font-size:12px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;background:#e9edf8;color:#2f6fb0">Keeper</span>`
+      : (d=>`<span style="font-size:12px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;background:${BG[d.k]};color:${COLOR[d.k]}">${esc(d.txt)}</span>`)(ptDiff(r.m.total,target));
+    const qs=`Q1 ${fmt(r.m.q[0])}' · Q2 ${fmt(r.m.q[1])}' · Q3 ${fmt(r.m.q[2])}' · Q4 ${fmt(r.m.q[3])}'`;
+    const borderStyle=i<list.length-1?"border-bottom:1px solid #e3e7f0;":"";
+    h+=`<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 2px;${borderStyle}">
+      <div style="width:38px;height:38px;border-radius:50%;background:${keeper?'#2f6fb0':'#13235a'};color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex:0 0 auto">${esc(jerseyLabel(r.pid))}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="font-weight:700;font-size:15px;color:#1a2238">${esc(name(r.pid))}${keeper?'<span style="font-size:10.5px;font-weight:800;color:#2f6fb0;margin-left:5px">GK</span>':''}</span>
+          <span style="display:flex;align-items:center;gap:8px;flex:0 0 auto"><span style="font-weight:800;font-size:16px;color:${color}">${fmt(r.m.total)}'</span>${pill}</span>
+        </div>
+        <div style="margin-top:7px;border-radius:5px;overflow:hidden;background:#eef1f8">${mtBarCellsEmail(r.m.grp,scaleMax,keeper?null:tickPct)}</div>
+        <div style="font-size:11px;color:#697089;margin-top:5px">${qs}</div>
+      </div>
+    </div>`;
   });
-  h+=`</table>`;
-  const short=list.filter(r=>ptStatus(r.m.total,target).k==="short").map(r=>esc(name(r.pid)));
+  h+=`</div>`;
+  const short=list.filter(r=>!isGK(r.pid)&&ptStatus(r.m.total,target).k==="short").map(r=>esc(name(r.pid)));
   if(short.length) h+=`<div style="font-size:13px;color:#c0392b;margin-bottom:6px"><b>Below target:</b> ${short.join(", ")}</div>`;
 
   if((g.goals||[]).length){
@@ -1744,9 +1802,11 @@ function seasonSummaryHTML(){
   h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${gamesCount} game${gamesCount>1?"s":""} logged &nbsp;&middot;&nbsp; Record <b>${record.w}-${record.l}-${record.t}</b></div>`;
   h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Total Minutes <span style="font-weight:400;color:#697089;font-size:12.5px">(sorted low → high)</span></h3>`;
   h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
-  h+=`<tr style="text-align:left;color:#8890a3;font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:5px 8px 5px 0">Player</th><th style="padding:5px 8px">Gms</th><th style="padding:5px 8px">Min</th><th style="padding:5px 0 5px 8px">Avg/Gm</th></tr>`;
+  h+=`<tr style="text-align:left;color:#8890a3;font-size:11px;text-transform:uppercase;letter-spacing:.4px"><th style="padding:5px 8px 5px 0">Player</th><th style="padding:5px 8px">Gms</th><th style="padding:5px 8px">Min</th><th style="padding:5px 8px">Avg/Gm</th><th style="padding:5px 0 5px 8px;width:26%">Share</th></tr>`;
+  const maxT=Math.max(1,...rows.map(r=>r.s.total));
   rows.forEach((r,i)=>{ const avg=r.s.games? r.s.total/r.s.games : 0; const bg=i%2?"#f7f8fb":"#ffffff";
-    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 8px;color:#697089">${r.s.games}</td><td style="padding:6px 8px"><b>${fmt(r.s.total)}</b></td><td style="padding:6px 0 6px 8px;color:#697089">${r.s.games?fmt(avg):"·"}</td></tr>`; });
+    h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 8px;color:#697089">${r.s.games}</td><td style="padding:6px 8px"><b>${fmt(r.s.total)}</b></td><td style="padding:6px 8px;color:#697089">${r.s.games?fmt(avg):"·"}</td>`+
+       `<td style="padding:6px 0 6px 8px"><div style="background:#eef4f0;border-radius:5px;height:8px;overflow:hidden;width:100%;min-width:46px"><div style="height:100%;background:#1e3a8a;width:${Math.round(r.s.total/maxT*100)}%"></div></div></td></tr>`; });
   h+=`</table>`;
   h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📍 Minutes by Position <span style="font-weight:400;color:#697089;font-size:12.5px">(GK / Def / Mid / Fwd)</span></h3>`;
   h+=`<table style="width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:8px">`;
