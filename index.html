@@ -136,6 +136,7 @@
   .chip.warn{background:#fff3e0;border-color:#f0c98a;color:#a05a00;}
   .chip.tired{background:#fdecea;border-color:#f0a8a0;color:#c62828;cursor:pointer;}
   .chip[onclick]{cursor:pointer;}
+  .chip.sel{background:var(--green);color:#fff;border-color:var(--green);}
   .chipmin{color:var(--muted);font-weight:700;}
   /* qtabs */
   .qtabs{display:flex;gap:5px;margin:4px 0 8px;}
@@ -325,6 +326,9 @@ function bestFormationFor(n){
 const GRP_LABEL = {GK:"Keeper",D:"Defense",M:"Midfield",F:"Forward"};
 const GRP_ORDER = ["GK","D","M","F"];
 const GRP_COLOR = {GK:"#2f6fb0",D:"#16a34a",M:"#e0a426",F:"#e5534b"};
+const PRACTICE_FOCUS = ["Passing & receiving","First touch & control","Shooting & finishing",
+  "1v1 defending","Dribbling","Communication","Movement off the ball","Team shape & positioning",
+  "Set pieces","Goalkeeping","Fitness & conditioning","Winning 50/50s"];
 // Jersey marker text: use the player's number if set, otherwise their initials.
 function jerseyLabel(pid){ const p=state.roster.find(x=>x.id===pid);
   if(p && p.number!=null && String(p.number).trim()!=="") return String(p.number).trim();
@@ -1050,8 +1054,14 @@ function renderGameFinish(g){
     </div>
     <div class="muted" style="font-size:11.5px;margin-top:4px">Your score is counted automatically from goals logged on the Live tab. Enter the final opponent score here.</div>
   </div>`;
+  h+=`<h2 class="sec">Practice focus</h2><div class="card">
+    <div class="muted" style="font-size:12.5px;margin-bottom:8px">What should next practice work on? Tap all that apply.</div>
+    <div class="bench">${PRACTICE_FOCUS.map((t,i)=>`<span class="chip${(g.practiceFocus||[]).includes(t)?' sel':''}" onclick="togglePracticeFocus(${i})">${esc(t)}</span>`).join("")}</div>
+    <label class="fld">Other</label>
+    <input type="text" value="${esc(g.practiceFocusOther||"")}" onchange="setGame('practiceFocusOther',this.value)" placeholder="Anything else not listed above">
+  </div>`;
   h+=`<h2 class="sec">Game notes</h2><div class="card">
-    <textarea onchange="setGame('notes',this.value)" placeholder="How it went, who stood out, what to work on, injuries… included in your email & backup." style="width:100%;min-height:74px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc(g.notes||"")}</textarea></div>`;
+    <textarea onchange="setGame('notes',this.value)" placeholder="How it went, who stood out, injuries… included in your email & backup." style="width:100%;min-height:74px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc(g.notes||"")}</textarea></div>`;
   h+=renderGameMinutes(g);
   return h;
 }
@@ -1154,6 +1164,8 @@ function gameSummaryText(g){
   }
   L.push(""); L.push(DIV); L.push("📍 POSITION MINUTES  (GK / Def / Mid / Fwd)"); L.push(DIV);
   list.forEach(r=>{ const gp=r.m.grp; L.push(name(r.pid)+" — "+fmt(gp.GK||0)+" / "+fmt(gp.D||0)+" / "+fmt(gp.M||0)+" / "+fmt(gp.F||0)); });
+  const focusItems=(g.practiceFocus||[]).slice(); if(g.practiceFocusOther) focusItems.push(g.practiceFocusOther);
+  if(focusItems.length){ L.push(""); L.push(DIV); L.push("🏋️ PRACTICE FOCUS"); L.push(DIV); L.push(focusItems.join(", ")); }
   if(g.notes){ L.push(""); L.push(DIV); L.push("📝 NOTES"); L.push(DIV); L.push(g.notes); }
   return L.join("\n");
 }
@@ -1222,6 +1234,9 @@ function gameSummaryHTML(g){
   }
   sub.push("Target "+fmt(target)+" min/player");
   h+=`<div style="color:#697089;font-size:14px;margin-bottom:16px">${sub.join(" &nbsp;&middot;&nbsp; ")}</div>`;
+
+  const focusItemsH=(g.practiceFocus||[]).slice(); if(g.practiceFocusOther) focusItemsH.push(g.practiceFocusOther);
+  if(focusItemsH.length) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">🏋️ Practice Focus</h3><div style="font-size:13.5px;margin-bottom:8px">${focusItemsH.map(esc).join(", ")}</div>`;
 
   if(g.notes) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📝 Notes</h3><div style="font-size:13.5px;white-space:pre-wrap;margin-bottom:8px">${esc(g.notes)}</div>`;
 
@@ -1294,6 +1309,10 @@ function afterGameRender(){}
 
 //// ---------- Game mutations ----------
 function setGame(k,v){ const g=curGame(); g[k]=v; save(); if(k==="opp"||k==="date"){} }
+function togglePracticeFocus(i){ const g=curGame(); if(!g)return; const tag=PRACTICE_FOCUS[i];
+  const arr=(g.practiceFocus||[]).slice(); const idx=arr.indexOf(tag);
+  if(idx>=0) arr.splice(idx,1); else arr.push(tag);
+  g.practiceFocus=arr; save(); render(); }
 // Opponent's score is tracked as a plain running count on the Live tab — no per-goal detail,
 // same underlying g.them field the Finished tab's score input edits.
 function bumpThem(d){ const g=curGame(); if(!g) return; let v=parseInt(g.them,10); if(isNaN(v)) v=0; v=Math.max(0,v+d); g.them=v; save(); render(); }
