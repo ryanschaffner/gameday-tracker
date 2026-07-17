@@ -163,6 +163,8 @@
   .pickrow .ord{width:24px;height:24px;border-radius:50%;background:var(--green);color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;}
   .pickrow.clear{color:#c62828;justify-content:center;}
   .note{font-size:12.5px;color:var(--muted);background:var(--green-light);border-radius:9px;padding:9px 11px;margin:8px 0;}
+  .fbnote{font-size:12.5px;background:#f5f7fc;border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin:5px 0 0;}
+  .fbnote .fbdate{font-size:11px;color:var(--muted);margin-bottom:2px;}
   .toolbtns{display:flex;gap:6px;flex-wrap:wrap;}
   h2.sec{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:16px 2px 6px;}
   /* ---- minutes-tracker card (Playing-time list + Live quarter strip) ---- */
@@ -216,7 +218,7 @@
   body.dark .qtabs button{background:var(--card);color:var(--muted);}
   body.dark .btn.ghost{background:var(--card);color:var(--ink);}
   body.dark input,body.dark select,body.dark textarea{background:#0e1526;color:var(--ink);border-color:var(--line);}
-  body.dark .pl,body.dark .sheet,body.dark .ltools,body.dark .sub-item{background:var(--card);}
+  body.dark .pl,body.dark .sheet,body.dark .ltools,body.dark .sub-item,body.dark .fbnote{background:var(--card);}
   body.dark .pl{border-color:var(--line);}
   body.dark .pl.absent{background:#10162a;}
   body.dark .pl .ord.off{background:#232c46;color:var(--muted);}
@@ -1039,6 +1041,7 @@ function renderGameLive(g){
     </div>`;
   });
   h+=`</div>`;
+  h+=renderPlayerFeedback(g);
   h+=`<button class="btn wide" style="margin-top:10px" onclick="setPhase('finish')">Finish game →</button>`;
   return h;
 }
@@ -1062,6 +1065,7 @@ function renderGameFinish(g){
   </div>`;
   h+=`<h2 class="sec">Game notes</h2><div class="card">
     <textarea onchange="setGame('notes',this.value)" placeholder="How it went, who stood out, injuries… included in your email & backup." style="width:100%;min-height:74px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc(g.notes||"")}</textarea></div>`;
+  h+=renderPlayerFeedback(g);
   h+=renderGameMinutes(g);
   return h;
 }
@@ -1167,6 +1171,9 @@ function gameSummaryText(g){
   const focusItems=(g.practiceFocus||[]).slice(); if(g.practiceFocusOther) focusItems.push(g.practiceFocusOther);
   if(focusItems.length){ L.push(""); L.push(DIV); L.push("🏋️ PRACTICE FOCUS"); L.push(DIV); L.push(focusItems.join(", ")); }
   if(g.notes){ L.push(""); L.push(DIV); L.push("📝 NOTES"); L.push(DIV); L.push(g.notes); }
+  const fbList=present.map(pid=>({pid,fb:((g.feedback||{})[pid]||"").trim()})).filter(r=>r.fb);
+  if(fbList.length){ L.push(""); L.push(DIV); L.push("🗣️ PLAYER FEEDBACK"); L.push(DIV);
+    fbList.forEach(r=>{ L.push(name(r.pid)+": "+r.fb); }); }
   return L.join("\n");
 }
 function emailSummary(id){ const g=state.games.find(x=>x.id===id); if(!g)return;
@@ -1285,6 +1292,12 @@ function gameSummaryHTML(g){
     h+=`</ul>`;
   }
 
+  const fbListH=present.map(pid=>({pid,fb:((g.feedback||{})[pid]||"").trim()})).filter(r=>r.fb);
+  if(fbListH.length){
+    h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">🗣️ Player Feedback</h3>`;
+    fbListH.forEach(r=>{ h+=`<div style="margin-bottom:8px;font-size:13.5px"><b>${esc(name(r.pid))}</b> — <span style="white-space:pre-wrap">${esc(r.fb)}</span></div>`; });
+  }
+
   h+=`</div>`;
   return h;
 }
@@ -1309,6 +1322,19 @@ function afterGameRender(){}
 
 //// ---------- Game mutations ----------
 function setGame(k,v){ const g=curGame(); g[k]=v; save(); if(k==="opp"||k==="date"){} }
+function setFeedback(pid,v){ const g=curGame(); if(!g) return; g.feedback=g.feedback||{}; g.feedback[pid]=v; save(); }
+function renderPlayerFeedback(g){
+  const present=g.present||[];
+  let h=`<div class="card"><b style="font-size:14px">Player feedback</b>
+    <div class="muted" style="font-size:12.5px;margin:3px 0 8px">Quick note per kid on how they played today — editable here and on the Finished tab.</div>`;
+  if(!present.length){ h+=`<div class="muted" style="font-size:13px">No one's checked in yet.</div>`; }
+  else present.forEach((pid,i)=>{
+    h+=`<label class="fld"${i===0?' style="margin-top:0"':''}>${esc(name(pid))}</label>
+      <textarea onchange="setFeedback('${pid}',this.value)" placeholder="e.g. great hustle, work on first touch" style="width:100%;min-height:44px;font-size:15px;padding:8px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical">${esc((g.feedback&&g.feedback[pid])||"")}</textarea>`;
+  });
+  h+=`</div>`;
+  return h;
+}
 function togglePracticeFocus(i){ const g=curGame(); if(!g)return; const tag=PRACTICE_FOCUS[i];
   const arr=(g.practiceFocus||[]).slice(); const idx=arr.indexOf(tag);
   if(idx>=0) arr.splice(idx,1); else arr.push(tag);
@@ -1770,6 +1796,22 @@ function renderSeason(){
   state.roster.map(p=>({p,s:stats[p.id]})).sort((a,b)=> (b.s.goals+b.s.assists)-(a.s.goals+a.s.assists) || b.s.goals-a.s.goals)
     .forEach(r=>{ h+=`<tr><td class="name">${esc(r.p.name)}</td><td>${r.s.goals||"·"}</td><td>${r.s.assists||"·"}</td><td><b>${(r.s.goals+r.s.assists)||"·"}</b></td></tr>`; });
   h+=`</tbody></table></div>`;
+  // player feedback log — every note logged across the season, grouped by kid
+  const fbByPid=seasonFeedbackByPlayer();
+  const fbPlayers=state.roster.filter(p=>(fbByPid[p.id]||[]).length);
+  if(fbPlayers.length){
+    h+=`<div class="card"><b style="font-size:13px">Player feedback</b>
+      <div class="muted" style="font-size:12.5px;margin:3px 0 6px">Every note logged this season, most recent first.</div>`;
+    fbPlayers.forEach(p=>{
+      h+=`<div style="margin-top:10px"><b style="font-size:13.5px">${esc(p.name)}</b>`;
+      fbByPid[p.id].forEach(e=>{
+        const label=[e.date?fmtDateLong(e.date):null, e.opp?("vs "+e.opp):null].filter(Boolean).join(" · ");
+        h+=`<div class="fbnote">${label?`<div class="fbdate">${esc(label)}</div>`:""}${esc(e.text)}</div>`;
+      });
+      h+=`</div>`;
+    });
+    h+=`</div>`;
+  }
   // season export — deliberately separate from the per-game postgame email
   h+=`<div class="card"><b style="font-size:14px">Send season summary</b>
     <div class="muted" style="font-size:13px;margin:3px 0 8px">Totals across all ${gamesCount} game${gamesCount>1?"s":""} logged so far — separate from the per-game emails, so it only goes out when you send it.</div>
@@ -1790,6 +1832,20 @@ function seasonStats(){
   state.games.forEach(g=>{ if((g.goals&&g.goals.length)||(g.them!==""&&g.them!=null)){ const us=ourScore(g),them=(g.them!==""&&g.them!=null)?+g.them:0; if(us>them)w++;else if(us<them)l++;else t++; } });
   return {stats, record:{w,l,t}, gamesCount:state.games.length};
 }
+// Every non-empty per-player note logged across the season, grouped by player and sorted
+// newest-first — a running log a coach can scroll through instead of re-reading each game.
+function seasonFeedbackByPlayer(){
+  const byPid={};
+  state.games.slice().sort((a,b)=> (a.date||"").localeCompare(b.date||"") || a.id.localeCompare(b.id)).forEach(g=>{
+    const fb=g.feedback||{};
+    Object.keys(fb).forEach(pid=>{
+      const txt=(fb[pid]||"").trim(); if(!txt) return;
+      (byPid[pid]=byPid[pid]||[]).push({date:g.date,opp:g.opp,text:txt});
+    });
+  });
+  Object.keys(byPid).forEach(pid=>byPid[pid].reverse());
+  return byPid;
+}
 function seasonSummaryText(){
   const {stats,record,gamesCount}=seasonStats();
   const DIV="––––––––––––––––––––";
@@ -1808,6 +1864,18 @@ function seasonSummaryText(){
   if(scorers.length){
     L.push(""); L.push(DIV); L.push("⚽ GOALS & ASSISTS"); L.push(DIV);
     scorers.forEach(r=>{ L.push(r.p.name+" — "+r.s.goals+" G, "+r.s.assists+" A"); });
+  }
+  const fbByPid=seasonFeedbackByPlayer();
+  const fbPlayers=state.roster.filter(p=>(fbByPid[p.id]||[]).length);
+  if(fbPlayers.length){
+    L.push(""); L.push(DIV); L.push("🗣️ PLAYER FEEDBACK"); L.push(DIV);
+    fbPlayers.forEach(p=>{
+      L.push(p.name+":");
+      fbByPid[p.id].forEach(e=>{
+        const label=[e.date?fmtDateLong(e.date):null, e.opp?("vs "+e.opp):null].filter(Boolean).join(" · ");
+        L.push("  "+(label?"["+label+"] ":"")+e.text);
+      });
+    });
   }
   return L.join("\n");
 }
@@ -1838,6 +1906,19 @@ function seasonSummaryHTML(){
     scorers.forEach((r,i)=>{ const bg=i%2?"#f7f8fb":"#ffffff";
       h+=`<tr style="background:${bg}"><td style="padding:6px 8px 6px 0;font-weight:600">${esc(r.p.name)}</td><td style="padding:6px 8px;color:#697089">${r.s.goals} G</td><td style="padding:6px 0;color:#697089">${r.s.assists} A</td></tr>`; });
     h+=`</table>`;
+  }
+  const fbByPid=seasonFeedbackByPlayer();
+  const fbPlayers=state.roster.filter(p=>(fbByPid[p.id]||[]).length);
+  if(fbPlayers.length){
+    h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">🗣️ Player Feedback</h3>`;
+    fbPlayers.forEach(p=>{
+      h+=`<div style="margin-bottom:10px"><b style="font-size:13.5px">${esc(p.name)}</b>`;
+      fbByPid[p.id].forEach(e=>{
+        const label=[e.date?fmtDateLong(e.date):null, e.opp?("vs "+e.opp):null].filter(Boolean).join(" · ");
+        h+=`<div style="margin-top:3px;font-size:13px;color:#1a2238">${label?`<span style="color:#697089;font-size:11.5px">${esc(label)} — </span>`:""}<span style="white-space:pre-wrap">${esc(e.text)}</span></div>`;
+      });
+      h+=`</div>`;
+    });
   }
   h+=`</div>`;
   return h;
