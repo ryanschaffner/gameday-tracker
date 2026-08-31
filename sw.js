@@ -2,7 +2,7 @@
 // Strategy: try the network first (so you always get the latest deployed version when
 // online), and fall back to whatever's cached if the network fails. This is a single-page,
 // no-backend app, so there's nothing else to cache — just the page itself.
-const CACHE = "gameday-tracker-v1";
+const CACHE = "gameday-tracker-v4";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -22,6 +22,9 @@ self.addEventListener("activate", (e) => {
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
+  // Only handle same-origin page/asset requests. Cross-origin calls (e.g. the sharing Worker API)
+  // must always hit the network directly so viewers get fresh data and flags post reliably.
+  if (new URL(e.request.url).origin !== self.location.origin) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {
