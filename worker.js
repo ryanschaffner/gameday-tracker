@@ -131,6 +131,8 @@ export default {
           teamId: String(f.teamId || "").slice(0, 64),
           gameId: String(f.gameId || "").slice(0, 64),
           pid: String(f.pid || "").slice(0, 64),
+          scorer: String(f.scorer || "").slice(0, 64),
+          assist: String(f.assist || "").slice(0, 64),
           label: String(f.label || "").slice(0, 80),
           by: String(f.by || "").slice(0, 40),
         };
