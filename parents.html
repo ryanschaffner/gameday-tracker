@@ -173,6 +173,7 @@ function render(){
   if(!g){ document.getElementById("app").innerHTML=h+`<div class="card muted">No games yet for ${esc(t.name||"this team")}.</div>`; return; }
 
   h+=renderScoreboard(g,t,live);
+  h+=`<div style="text-align:center;margin:2px 0 12px" id="pushBtn"></div>`;
   // Goal feed: only while a game is live (per spec). Between games we still show the final score above,
   // but the running feed is hidden until the next game starts.
   if(live) h+=renderFeed(g,t);
@@ -180,6 +181,7 @@ function render(){
   h+=renderRoster(g,t,live);
 
   document.getElementById("app").innerHTML=h;
+  setTimeout(renderPushBtn,0);
 }
 
 function renderScoreboard(g,t,live){
@@ -321,6 +323,46 @@ function seasonTotals(t){
 
 function pickTeam(id){ activeTeamId=id; render(); }
 function showFatal(msg){ document.getElementById("app").innerHTML=`<div class="card"><b>Can't open this page</b><div class="muted" style="margin-top:6px;font-size:14px">${esc(msg)}</div></div>`; document.getElementById("hdrTitle").textContent="Unavailable"; }
+
+// ---- Notifications (followers get goals / game start-end for the team they're viewing) ----
+function pushSupported(){ return ("serviceWorker" in navigator)&&("PushManager" in window)&&("Notification" in window); }
+function urlB64ToU8(base64){ const pad="=".repeat((4-base64.length%4)%4); const b=(base64+pad).replace(/-/g,"+").replace(/_/g,"/");
+  const raw=atob(b); const o=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++) o[i]=raw.charCodeAt(i); return o; }
+let _swReg=null;
+async function ensureSW(){ if(_swReg) return _swReg; _swReg=await navigator.serviceWorker.register("push-sw.js"); await navigator.serviceWorker.ready; return _swReg; }
+async function pushState(){ if(!pushSupported()) return "unsupported"; if(Notification.permission==="denied") return "denied";
+  try{ const reg=await ensureSW(); const sub=await reg.pushManager.getSubscription(); return sub?"on":"off"; }catch(e){ return "off"; } }
+async function enablePush(){
+  const t=team(); if(!t){ toast("Nothing to follow yet"); return; }
+  if(!pushSupported()){ alert("Notifications aren't supported here. On iPhone, tap Share → Add to Home Screen, open the app from your home screen, then try again."); return; }
+  if(!SHARE_API||SHARE_API.indexOf("__SHARE_API__")===0){ alert("This page isn't fully configured for notifications."); return; }
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=="granted"){ alert("Notifications weren't allowed."); renderPushBtn(); return; }
+    const keyRes=await fetch(SHARE_API+"/vapid").then(r=>r.json());
+    if(!keyRes.enabled||!keyRes.publicKey){ alert("Notifications aren't set up on the server yet."); return; }
+    const reg=await ensureSW();
+    const sub=await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey:urlB64ToU8(keyRes.publicKey) });
+    const r=await fetch(SHARE_API+"/subscribe/"+SHARE_ID,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({subscription:sub.toJSON(), role:"follower", teamId:t.id})});
+    if(!r.ok) throw new Error("register failed ("+r.status+")");
+    alert("Notifications on! You'll get an alert when "+(t.name||"the team")+" scores or a game starts or ends.");
+  }catch(e){ alert("Couldn't turn on notifications: "+((e&&e.message)||e)); }
+  renderPushBtn();
+}
+async function disablePush(){
+  try{ const reg=await ensureSW(); const sub=await reg.pushManager.getSubscription();
+    if(sub){ await fetch(SHARE_API+"/unsubscribe/"+SHARE_ID,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:sub.endpoint})}).catch(()=>{}); await sub.unsubscribe(); } }catch(e){}
+  renderPushBtn();
+}
+async function renderPushBtn(){
+  const el=document.getElementById("pushBtn"); if(!el) return;
+  const st=await pushState();
+  if(st==="unsupported"){ el.innerHTML=`<span class="muted" style="font-size:11.5px">Add to Home Screen to enable alerts</span>`; return; }
+  if(st==="denied"){ el.innerHTML=`<span class="muted" style="font-size:11.5px">Notifications blocked in settings</span>`; return; }
+  if(st==="on"){ el.innerHTML=`<span class="pill" style="background:var(--green);color:#fff">🔔 On</span> <button class="btn" style="background:#eef1f7;color:var(--ink);padding:5px 10px;font-size:12px;margin-left:6px" onclick="disablePush()">Turn off</button>`; return; }
+  el.innerHTML=`<button class="btn" style="padding:7px 12px;font-size:13px" onclick="enablePush()">🔔 Notify me of goals</button>`;
+}
 
 fetchSnap(); startPoll();
 setInterval(()=>{ if(snap) render(); }, 1000); // tick the clock/freshness display between fetches
