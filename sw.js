@@ -2,7 +2,7 @@
 // Strategy: try the network first (so you always get the latest deployed version when
 // online), and fall back to whatever's cached if the network fails. This is a single-page,
 // no-backend app, so there's nothing else to cache — just the page itself.
-const CACHE = "gameday-tracker-v8";
+const CACHE = "gameday-tracker-v9";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
@@ -35,5 +35,34 @@ self.addEventListener("fetch", (e) => {
       .catch(() =>
         caches.match(e.request).then((r) => r || caches.match(self.registration.scope))
       )
+  );
+});
+
+// ---- Push notifications ----
+// The Worker sends an encrypted JSON payload {title, body, tag, url}. Show it as a notification.
+self.addEventListener("push", (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) { data = { title: "Game Day", body: (e.data && e.data.text && e.data.text()) || "Update" }; }
+  const title = data.title || "Game Day Tracker";
+  const options = {
+    body: data.body || "",
+    tag: data.tag || undefined,        // same tag collapses duplicates (e.g. repeated goal)
+    renotify: true,
+    data: { url: data.url || "index.html" },
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+  };
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Tapping a notification focuses an open tab if there is one, else opens the target page.
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const target = (e.notification.data && e.notification.data.url) || "index.html";
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cls) => {
+      for (const c of cls) { if ("focus" in c) return c.focus(); }
+      if (self.clients.openWindow) return self.clients.openWindow(target);
+    })
   );
 });
