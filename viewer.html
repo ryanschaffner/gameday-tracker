@@ -48,6 +48,11 @@
     padding:10px 16px;border-radius:22px;font-size:13px;font-weight:600;opacity:0;transition:opacity .2s;z-index:50;}
   .toast.show{opacity:1;}
   a.plain{color:var(--gk);}
+  .modalwrap{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;align-items:flex-end;justify-content:center;}
+  .modalcard{background:#fff;width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px 16px 22px;}
+  .modalcard h3{margin:0 0 10px;font-size:17px;}
+  .modalcard label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.4px;}
+  .modalcard select{width:100%;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#fff;}
 </style>
 </head>
 <body>
@@ -61,6 +66,7 @@
 </header>
 <main id="app"><div class="card muted">Loading the latest from your head coach…</div></main>
 <div class="toast" id="toast"></div>
+<div id="modal" class="modalwrap" style="display:none"><div class="modalcard" id="modalCard"></div></div>
 
 <script>
 // The viewer is READ-ONLY except for raising flags. It never holds the coach's edit key, so it can
@@ -159,7 +165,9 @@ function render(){
 
   // score
   const us=(g.goals||[]).length; const them=(g.them!==""&&g.them!=null)?g.them:0;
-  h+=`<div class="card"><div class="row between"><b>Score</b><span class="pill">${us} – ${them}</span></div></div>`;
+  h+=`<div class="card"><div class="row between" style="align-items:center"><b>Score</b><span class="pill">${us} – ${them}</span></div>
+    <button class="btn wide" style="margin-top:10px" onclick="openGoalFlag()">⚽ Log a goal</button>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Pick the scorer and assist — it goes to the head coach to confirm.</div></div>`;
 
   app.innerHTML=h;
 }
@@ -234,13 +242,42 @@ function renderMinutes(g,t){
 function flagButtons(g,pid,nm){
   const t=team();
   const mk=(type,label,text)=>`<button class="btn ghost sm" onclick="raiseFlag('${type}','${pid}','${esc(label).replace(/'/g,"&#39;")}')">${text}</button>`;
-  return mk("sub","Sub: "+nm,"⇄ Sub") + mk("goal","Goal: "+nm,"⚽") + mk("tired","Tired: "+nm,"😓");
+  return mk("sub","Sub: "+nm,"⇄ Sub") + mk("tired","Tired: "+nm,"😓");
+}
+// Goal logging: assistant picks scorer + assist, both ride along on the flag so the coach confirms
+// (not re-enters). Scorer defaults to blank; assist optional.
+function openGoalFlag(){
+  const t=team(); const g=t?curGame(t):null; if(!g){ toast("No game yet"); return; }
+  const present=(g.present||[]);
+  const nameOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:""; };
+  let opts=`<option value="">Unknown / own goal</option>`+present.map(pid=>`<option value="${pid}">${esc(nameOf(pid))}</option>`).join("");
+  let aopts=`<option value="">— none —</option>`+present.map(pid=>`<option value="${pid}">${esc(nameOf(pid))}</option>`).join("");
+  const card=document.getElementById("modalCard");
+  card.innerHTML=`<h3>⚽ Log a goal</h3>
+    <label>Scorer</label><select id="gfScorer">${opts}</select>
+    <label>Assist (optional)</label><select id="gfAssist">${aopts}</select>
+    <div class="row" style="gap:8px;margin-top:16px">
+      <button class="btn" style="flex:1" onclick="submitGoalFlag()">Send to coach</button>
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+    </div>`;
+  document.getElementById("modal").style.display="flex";
+}
+function closeModal(){ document.getElementById("modal").style.display="none"; }
+async function submitGoalFlag(){
+  const t=team(); const g=t?curGame(t):null; if(!g) return;
+  const scorer=document.getElementById("gfScorer").value||"";
+  let assist=document.getElementById("gfAssist").value||"";
+  if(assist && assist===scorer) assist="";
+  const nameOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:""; };
+  const label="Goal: "+(scorer?nameOf(scorer):"Unknown");
+  closeModal();
+  await raiseFlag("goal", scorer, label, {scorer, assist});
 }
 
-async function raiseFlag(type,pid,label){
+async function raiseFlag(type,pid,label,extra){
   const t=team(); const g=t?curGame(t):null;
   if(!SHARE_ID) return;
-  const flag={ type, pid, label, by:myName||"", teamId:t?t.id:"", gameId:g?g.id:"" };
+  const flag=Object.assign({ type, pid, label, by:myName||"", teamId:t?t.id:"", gameId:g?g.id:"" }, extra||{});
   try{
     const r=await fetch(SHARE_API+"/flag/"+encodeURIComponent(SHARE_ID),{method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({flag})});
