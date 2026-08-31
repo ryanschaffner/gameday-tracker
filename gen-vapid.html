@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generate VAPID keys</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:680px;margin:0 auto;padding:20px;color:#1a2238;background:#f4f6fb}
+  h1{font-size:20px} .card{background:#fff;border:1px solid #e3e7f0;border-radius:12px;padding:16px;margin:12px 0}
+  label{font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:#697089;display:block;margin:10px 0 4px}
+  textarea,input{width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:9px;border:1px solid #e3e7f0;border-radius:8px;box-sizing:border-box}
+  button{background:#1b7a3d;color:#fff;border:none;border-radius:9px;padding:11px 16px;font-size:15px;font-weight:700;cursor:pointer}
+  .muted{color:#697089;font-size:13px} code{background:#eef1f7;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<h1>Generate your VAPID keys</h1>
+<p class="muted">These keys let your Worker send push notifications. Generate them once, paste the three values into your Worker's environment variables (see SHARING-SETUP.md), and you're done. Nothing is sent anywhere — this runs entirely in your browser.</p>
+<div class="card">
+  <button onclick="gen()">Generate keys</button>
+  <div id="out" style="display:none">
+    <label>VAPID_PUBLIC</label><input id="pub" readonly onclick="this.select()">
+    <label>VAPID_PRIVATE_JWK</label><textarea id="priv" rows="6" readonly onclick="this.select()"></textarea>
+    <label>VAPID_SUBJECT</label><input id="subj" value="mailto:you@example.com">
+    <p class="muted" style="margin-top:12px">Copy each value into the matching Worker environment variable. Change the subject to your real email. <b>Keep the private JWK secret</b> — treat it like a password.</p>
+  </div>
+</div>
+<script>
+function b64url(buf){ let s=""; const b=new Uint8Array(buf); for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function gen(){
+  const kp=await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"}, true, ["sign","verify"]);
+  const jwk=await crypto.subtle.exportKey("jwk", kp.privateKey);
+  const rawPub=await crypto.subtle.exportKey("raw", kp.publicKey);
+  document.getElementById("pub").value=b64url(rawPub);
+  document.getElementById("priv").value=JSON.stringify(jwk);
+  document.getElementById("out").style.display="block";
+}
+</script>
+</body>
+</html>
