@@ -84,6 +84,9 @@
 const params = new URLSearchParams(location.search);
 const SHARE_ID = params.get("s") || "";
 const SHARE_API = params.get("api") || "__SHARE_API__";
+// If the link carries &team=<id>, this parent link is LOCKED to that one team: the page shows only
+// that team and hides the switcher, so a parent can't browse other teams. Empty = show all (legacy).
+const LOCK_TEAM = params.get("team") || "";
 
 let snap=null, activeTeamId=null, lastError=null, pollTimer=null, lastFetch=0;
 
@@ -98,14 +101,19 @@ async function fetchSnap(){
     if(r.status===404){ showFatal("This link is no longer active. Ask the coach for the current one."); stopPoll(); return; }
     if(!r.ok) throw new Error("HTTP "+r.status);
     const j=await r.json(); snap=j.data; lastError=null; lastFetch=Date.now();
-    if(!activeTeamId && snap.teams && snap.teams.length) activeTeamId=snap.activeTeamId||snap.teams[0].id;
+    // If this link is locked to a team, always select it (ignore the snapshot's active team).
+    if(LOCK_TEAM && snap.teams && snap.teams.find(t=>t.id===LOCK_TEAM)) activeTeamId=LOCK_TEAM;
+    else if(!activeTeamId && snap.teams && snap.teams.length) activeTeamId=snap.activeTeamId||snap.teams[0].id;
     render();
   }catch(e){ lastError=(e&&e.message)||"network"; render(); }
 }
 function startPoll(){ stopPoll(); pollTimer=setInterval(fetchSnap, 8000); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 
-function team(){ return (snap&&snap.teams||[]).find(t=>t.id===activeTeamId) || (snap&&snap.teams||[])[0] || null; }
+function team(){
+  if(LOCK_TEAM) return (snap&&snap.teams||[]).find(t=>t.id===LOCK_TEAM) || null;
+  return (snap&&snap.teams||[]).find(t=>t.id===activeTeamId) || (snap&&snap.teams||[])[0] || null;
+}
 function latestGame(t){ if(!t||!t.games||!t.games.length) return null; return t.games[t.games.length-1]; }
 function periodType(g){ return g&&g.format&&g.format.periodType==="halves"?"halves":"quarters"; }
 function periodLabel(g,i){ return (periodType(g)==="halves"?"H":"Q")+(i+1); }
@@ -153,12 +161,15 @@ function render(){
   if(lastFetch){ const secs=Math.round((Date.now()-lastFetch)/1000);
     h+=`<div class="fresh">${lastError?"Can't reach the latest — retrying…":("Updated "+(secs<5?"just now":secs+"s ago")+" · refreshes on its own")}</div>`; }
 
-  // team switcher
-  if(snap.teams && snap.teams.length>1){
+  // team switcher — only when NOT locked to a single team
+  if(!LOCK_TEAM && snap.teams && snap.teams.length>1){
     h+=`<div class="teamtabs">`+snap.teams.map(tt=>`<button class="${tt.id===activeTeamId?'active':''}" onclick="pickTeam('${tt.id}')">${esc(tt.name||'Team')}</button>`).join("")+`</div>`;
   }
 
-  if(!t){ document.getElementById("app").innerHTML=h+`<div class="card muted">Nothing shared yet.</div>`; return; }
+  if(!t){
+    const msg = LOCK_TEAM ? "This team isn't being shared right now. Check with the coach for the current link." : "Nothing shared yet.";
+    document.getElementById("app").innerHTML=h+`<div class="card muted">${msg}</div>`; return;
+  }
   if(!g){ document.getElementById("app").innerHTML=h+`<div class="card muted">No games yet for ${esc(t.name||"this team")}.</div>`; return; }
 
   h+=renderScoreboard(g,t,live);
