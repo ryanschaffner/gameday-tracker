@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Game Day — Assistant View</title>
+<style>
+  :root{ --ink:#1a2238; --muted:#697089; --line:#e3e7f0; --green:#1b7a3d; --green-dark:#13235a;
+    --gk:#2f6fb0; --d:#c98a1a; --m:#3a8a4a; --f:#c0392b; --bg:#f4f6fb; --card:#fff; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);
+    -webkit-text-size-adjust:100%;padding-bottom:40px;}
+  header{position:sticky;top:0;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);
+    padding:10px 14px;display:flex;align-items:center;gap:10px;z-index:10;}
+  header .eyebrow{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  header h1{margin:1px 0 0;font-size:17px;}
+  header .sub{font-size:11.5px;color:var(--muted);}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:#eef1f7;color:var(--muted);}
+  .pill.live{background:var(--green);color:#fff;}
+  main{max-width:640px;margin:0 auto;padding:12px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:11px;}
+  .muted{color:var(--muted);}
+  .row{display:flex;gap:8px;} .between{justify-content:space-between;} .wrap{flex-wrap:wrap;}
+  .teamtabs,.qtabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:10px;}
+  .teamtabs button,.qtabs button{flex:0 0 auto;background:#fff;border:1px solid var(--line);border-radius:20px;
+    padding:6px 13px;font-size:13px;font-weight:600;color:var(--ink);}
+  .teamtabs button.active,.qtabs button.active{background:var(--green-dark);color:#fff;border-color:var(--green-dark);}
+  .field{position:relative;background:linear-gradient(#2e7d43,#276b39);border-radius:14px;aspect-ratio:3/4;max-width:420px;margin:0 auto 8px;overflow:hidden;}
+  .field .ln{position:absolute;left:0;right:0;top:50%;height:2px;background:rgba(255,255,255,.35);}
+  .field .cir{position:absolute;left:50%;top:50%;width:64px;height:64px;border:2px solid rgba(255,255,255,.35);border-radius:50%;transform:translate(-50%,-50%);}
+  .slot{position:absolute;transform:translate(-50%,-50%);text-align:center;width:66px;}
+  .disc{width:38px;height:38px;border-radius:50%;background:#13235a;color:#fff;font-weight:800;font-size:14px;
+    line-height:38px;margin:0 auto;border:2px solid rgba(255,255,255,.8);}
+  .disc.gk{background:var(--gk);} .disc.d{background:var(--d);} .disc.m{background:var(--m);} .disc.f{background:var(--f);}
+  .disc.empty{background:rgba(255,255,255,.18);border-style:dashed;}
+  .who{font-size:11px;color:#fff;font-weight:600;margin-top:2px;text-shadow:0 1px 2px rgba(0,0,0,.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mt-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);}
+  .mt-badge{width:30px;height:30px;border-radius:50%;background:var(--green-dark);color:#fff;font-weight:800;font-size:13px;line-height:30px;text-align:center;flex:0 0 auto;}
+  .mt-name{font-weight:600;font-size:14px;} .mt-mins{font-weight:800;}
+  .btn{background:var(--green);color:#fff;border:none;border-radius:9px;padding:9px 13px;font-size:14px;font-weight:700;}
+  .btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);}
+  .btn.sm{padding:6px 10px;font-size:12.5px;}
+  .btn:disabled{opacity:.5;}
+  .flagbar{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
+  .banner{padding:9px 12px;border-radius:9px;font-size:13px;margin-bottom:11px;}
+  .banner.err{background:#fdecea;color:#c62828;} .banner.ok{background:#e7f6ec;color:#1b7a3d;}
+  .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#13235a;color:#fff;
+    padding:10px 16px;border-radius:22px;font-size:13px;font-weight:600;opacity:0;transition:opacity .2s;z-index:50;}
+  .toast.show{opacity:1;}
+  a.plain{color:var(--gk);}
+</style>
+</head>
+<body>
+<header>
+  <div style="flex:1;min-width:0">
+    <div class="eyebrow">Game Day · Assistant view</div>
+    <h1 id="hdrTitle">Loading…</h1>
+    <div class="sub" id="hdrSub">&nbsp;</div>
+  </div>
+  <span class="pill" id="livePill">·</span>
+</header>
+<main id="app"><div class="card muted">Loading the latest from your head coach…</div></main>
+<div class="toast" id="toast"></div>
+
+<script>
+// The viewer is READ-ONLY except for raising flags. It never holds the coach's edit key, so it can
+// never overwrite data — it only GETs the snapshot and POSTs flags. Configure the API + share id:
+const params = new URLSearchParams(location.search);
+const SHARE_ID = params.get("s") || "";
+// The API URL travels in the link the app generates (?api=...), so assistants never configure
+// anything. Falls back to a hard-coded constant if you host the viewer somewhere custom.
+const SHARE_API = params.get("api") || "__SHARE_API__";
+
+const FORMATIONS = null; // slot geometry travels inside the snapshot (each game's formation id), but
+// the viewer needs the coordinates too. To keep the viewer self-contained we read slot layout that
+// the app embeds per game; if absent, we fall back to a simple grid. (See renderField.)
+
+let snap = null;         // the whole published store
+let activeTeamId = null;
+let activeQi = 0;
+let myName = localStorage.getItem("gd_viewer_name") || "";
+let pollTimer = null;
+let lastError = null;
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function firstName(n){ return String(n||"").trim().split(/\s+/)[0]||""; }
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800); }
+
+async function fetchSnap(){
+  if(!SHARE_ID){ showFatal("No share code in this link. Ask your head coach to resend the link."); return; }
+  if(!SHARE_API || SHARE_API.indexOf("__SHARE_API__")===0){ showFatal("This viewer isn't configured yet (missing backend URL)."); return; }
+  try{
+    const r = await fetch(SHARE_API+"/snap/"+encodeURIComponent(SHARE_ID));
+    if(r.status===404){ showFatal("This share link is no longer active. Ask your head coach for a new one."); stopPoll(); return; }
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    const j = await r.json();
+    snap = j.data; lastError = null;
+    if(!activeTeamId && snap.teams && snap.teams.length) activeTeamId = snap.activeTeamId || snap.teams[0].id;
+    render();
+  }catch(e){ lastError = (e&&e.message)||"network"; render(); }
+}
+function startPoll(){ stopPoll(); pollTimer = setInterval(fetchSnap, 8000); } // near-live during a game
+function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+
+function team(){ return (snap&&snap.teams||[]).find(t=>t.id===activeTeamId) || (snap&&snap.teams||[])[0] || null; }
+function curGame(t){
+  // Show the most recent game (last in the list) — that's the one being run on game day.
+  if(!t||!t.games||!t.games.length) return null;
+  return t.games[t.games.length-1];
+}
+function periodLabel(g,i){ const halves=g&&g.format&&g.format.periodType==="halves"; return (halves?"H":"Q")+(i+1); }
+function periodsOf(g){ return (g&&g.format&&g.format.periods)|| (g&&g.quarters?g.quarters.length:4); }
+
+function slotOccupantAt(q, slotId, minute){
+  const evs=(q.subs||[]).filter(x=>x.slot===slotId).slice().sort((a,b)=>a.minute-b.minute);
+  let occ=q.lineup[slotId]||null; evs.forEach(ev=>{ if(ev.minute<=minute) occ=ev.on; }); return occ;
+}
+
+function render(){
+  if(!snap){ return; }
+  const t = team();
+  document.getElementById("hdrTitle").textContent = t ? (t.name||"Team") : "No teams shared";
+  const g = t?curGame(t):null;
+  document.getElementById("hdrSub").textContent = g ? (g.opp?("vs "+g.opp):"Game")+(g.date?(" · "+g.date):"") : "";
+  const pill=document.getElementById("livePill"); pill.textContent = lastError? "offline" : "live"; pill.className="pill "+(lastError?"":"live");
+
+  const app=document.getElementById("app");
+  let h="";
+  if(lastError){ h+=`<div class="banner err">Couldn't reach the latest data (${esc(lastError)}). Showing the last version; will keep retrying.</div>`; }
+
+  // name prompt (so flags say who raised them)
+  if(!myName){
+    h+=`<div class="card"><b>Who are you?</b>
+      <div class="muted" style="font-size:13px;margin:3px 0 8px">So your head coach knows who flagged what. Just a first name.</div>
+      <div class="row"><input id="nameIn" placeholder="e.g. Dana" style="flex:1;font-size:16px;padding:9px;border:1px solid var(--line);border-radius:9px">
+      <button class="btn" onclick="saveName()">Save</button></div></div>`;
+  }
+
+  // team switcher
+  if(snap.teams && snap.teams.length>1){
+    h+=`<div class="teamtabs">`+snap.teams.map(tt=>`<button class="${tt.id===activeTeamId?'active':''}" onclick="pickTeam('${tt.id}')">${esc(tt.name||'Team')}</button>`).join("")+`</div>`;
+  }
+
+  if(!t){ app.innerHTML=h+`<div class="card muted">No teams have been shared yet.</div>`; return; }
+  if(!g){ app.innerHTML=h+`<div class="card muted">No game set up yet for ${esc(t.name||'this team')}.</div>`; return; }
+
+  // period tabs
+  const P=periodsOf(g);
+  if(activeQi>=P) activeQi=P-1;
+  h+=`<div class="qtabs">`;
+  for(let i=0;i<P;i++) h+=`<button class="${i===activeQi?'active':''}" onclick="pickQ(${i})">${periodLabel(g,i)}</button>`;
+  h+=`</div>`;
+
+  const q=g.quarters[activeQi];
+  h+=`<div class="card">`+renderField(g,q,t)+`</div>`;
+
+  // minutes (whole game so far, schedule-based like the app)
+  h+=`<div class="card"><b style="font-size:14px">Minutes so far</b>`+renderMinutes(g,t)+`</div>`;
+
+  // score
+  const us=(g.goals||[]).length; const them=(g.them!==""&&g.them!=null)?g.them:0;
+  h+=`<div class="card"><div class="row between"><b>Score</b><span class="pill">${us} – ${them}</span></div></div>`;
+
+  app.innerHTML=h;
+}
+
+// Field: we don't ship the full formation geometry into the viewer, so we lay players out in tidy
+// rows by position group (GK / D / M / F). It's clear and reliable even if a formation id is unknown.
+function renderField(g,q,t){
+  const nameOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:""; };
+  // group current occupants by position group using the slot id prefix convention (gk/…); since the
+  // viewer lacks the slot table, we bucket by the slot's known group letter embedded in lineups is
+  // not available — so we approximate: gk slot is "gk"; the rest we show in one "on the field" grid.
+  const onIds=[]; Object.keys(q.lineup||{}).forEach(sid=>{ const occ=slotOccupantAt(q,sid,9999); if(occ) onIds.push({sid,occ}); });
+  const gk=onIds.find(o=>o.sid==="gk");
+  const others=onIds.filter(o=>o.sid!=="gk");
+  let h=`<div style="text-align:center;margin-bottom:8px"><b>${esc(periodLabel(g,activeQi))} lineup</b></div>`;
+  h+=`<div class="field">`;
+  h+=`<div class="ln"></div><div class="cir"></div>`;
+  // GK at the back
+  if(gk){ h+=discAt(50,88,"gk",nameOf(gk.occ)); }
+  // spread the rest across three rows
+  const rows=[[],[],[]];
+  others.forEach((o,i)=>{ rows[i%3].push(o); });
+  const ys=[68,46,24];
+  rows.forEach((row,ri)=>{ const n=row.length; row.forEach((o,ci)=>{ const x=n===1?50:12+ (76*(ci/(n-1))); h+=discAt(x, ys[ri], groupGuess(o.sid), nameOf(o.occ)); }); });
+  h+=`</div>`;
+  return h;
+}
+function groupGuess(sid){ // best-effort color from common slot ids
+  if(sid==="gk") return "gk";
+  if(/^(lb|rb|cb|lcb|rcb|sw|d)/.test(sid)) return "d";
+  if(/^(dm|cm|lm|rm|am|lcm|rcm|m)/.test(sid)) return "m";
+  return "f";
+}
+function discAt(x,y,cls,nm){
+  return `<div class="slot" style="left:${x}%;top:${y}%">
+    <div class="disc ${cls}">${nm?esc(firstName(nm).slice(0,3)):""}</div>
+    <div class="who">${esc(firstName(nm))}</div></div>`;
+}
+
+// Schedule-based minutes to end of each period (matches the app's "planned minutes" idea closely
+// enough for an at-a-glance assistant view).
+function renderMinutes(g,t){
+  const P=periodsOf(g);
+  const mins={};
+  for(let qi=0;qi<P;qi++){
+    const q=g.quarters[qi]; const len=(q&&q.len>0)?q.len:((g.format&&g.format.periodLength)||12);
+    const slotIds=new Set([...Object.keys(q.lineup||{}), ...((q.subs||[]).map(s=>s.slot))]);
+    slotIds.forEach(sid=>{
+      // walk this slot's timeline and credit occupants
+      const evs=(q.subs||[]).filter(x=>x.slot===sid).slice().sort((a,b)=>a.minute-b.minute);
+      let cur=q.lineup[sid]||null, tprev=0;
+      const credit=(pid,a,b)=>{ if(pid&&b>a) mins[pid]=(mins[pid]||0)+(b-a); };
+      evs.forEach(ev=>{ const m=Math.max(0,Math.min(len,ev.minute)); credit(cur,tprev,m); cur=ev.on; tprev=m; });
+      credit(cur,tprev,len);
+    });
+  }
+  const present=(g.present||[]);
+  const rows=present.map(pid=>({pid,m:Math.round((mins[pid]||0)*10)/10})).sort((a,b)=>a.m-b.m);
+  if(!rows.length) return `<div class="muted" style="font-size:13px;margin-top:6px">No lineup set yet.</div>`;
+  const nameOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:""; };
+  const jersey=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p&&p.number?p.number:(firstName(nameOf(pid))[0]||"?"); };
+  const g0=curGame(t);
+  let h="";
+  rows.forEach(r=>{
+    h+=`<div class="mt-row"><div class="mt-badge">${esc(jersey(r.pid))}</div>
+      <div style="flex:1"><span class="mt-name">${esc(nameOf(r.pid))}</span></div>
+      <span class="mt-mins">${r.m}'</span>
+      <div class="flagbar">${flagButtons(g0,r.pid,nameOf(r.pid))}</div></div>`;
+  });
+  return h;
+}
+function flagButtons(g,pid,nm){
+  const t=team();
+  const mk=(type,label,text)=>`<button class="btn ghost sm" onclick="raiseFlag('${type}','${pid}','${esc(label).replace(/'/g,"&#39;")}')">${text}</button>`;
+  return mk("sub","Sub: "+nm,"⇄ Sub") + mk("goal","Goal: "+nm,"⚽") + mk("tired","Tired: "+nm,"😓");
+}
+
+async function raiseFlag(type,pid,label){
+  const t=team(); const g=t?curGame(t):null;
+  if(!SHARE_ID) return;
+  const flag={ type, pid, label, by:myName||"", teamId:t?t.id:"", gameId:g?g.id:"" };
+  try{
+    const r=await fetch(SHARE_API+"/flag/"+encodeURIComponent(SHARE_ID),{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({flag})});
+    if(r.ok) toast("Sent to coach ✓"); else toast("Couldn't send — try again");
+  }catch(e){ toast("Couldn't send — check signal"); }
+}
+
+function pickTeam(id){ activeTeamId=id; activeQi=0; render(); }
+function pickQ(i){ activeQi=i; render(); }
+function saveName(){ const v=(document.getElementById("nameIn").value||"").trim(); if(!v) return; myName=v; localStorage.setItem("gd_viewer_name",v); render(); }
+function showFatal(msg){ document.getElementById("app").innerHTML=`<div class="card"><b>Can't open this share</b><div class="muted" style="margin-top:6px;font-size:14px">${esc(msg)}</div></div>`; document.getElementById("hdrTitle").textContent="Unavailable"; }
+
+fetchSnap(); startPoll();
+</script>
+</body>
+</html>
