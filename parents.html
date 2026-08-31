@@ -210,17 +210,19 @@ function renderFeed(g,t){
   let items="";
   if(!goals.length){ items=`<div class="muted" style="font-size:13px">No goals yet — check back!</div>`; }
   else {
-    // newest first feels more "feed-like"
     goals.slice().reverse().forEach(gl=>{
       const sc=nameOf(gl.scorer);
       const as=gl.assist?nameOf(gl.assist):null;
-      items+=`<div class="feed-item"><div class="feed-ic">⚽</div><div class="feed-main">
-        <div class="who">${esc(sc)}</div>
+      const tm=(gl.minute!=null?`<span style="color:var(--muted)">${gl.minute}\u2032 \u00b7 </span>`:"");
+      items+=`<div class="feed-item"><div class="feed-ic">\u26bd</div><div class="feed-main">
+        <div class="who">${tm}${esc(sc)}</div>
         ${as?`<div class="sub">assist ${esc(as)}</div>`:""}
       </div></div>`;
     });
   }
-  return `<div class="card"><div class="sectiontitle">Goals</div>${items}</div>`;
+  const shots=(g.shots||[]).length, saves=(g.saves||[]).length;
+  const tally=(shots||saves)?`<div class="muted" style="font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">\ud83e\udd45 ${shots} shots \u00b7 \ud83e\udde4 ${saves} saves</div>`:"";
+  return `<div class="card"><div class="sectiontitle">Goals</div>${items}${tally}</div>`;
 }
 
 function renderOnField(g,t){
