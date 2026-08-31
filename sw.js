@@ -2,7 +2,7 @@
 // Strategy: try the network first (so you always get the latest deployed version when
 // online), and fall back to whatever's cached if the network fails. This is a single-page,
 // no-backend app, so there's nothing else to cache — just the page itself.
-const CACHE = "gameday-tracker-v4";
+const CACHE = "gameday-tracker-v5";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();
