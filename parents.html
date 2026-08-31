@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Game Day — Follow Along</title>
+<style>
+  :root{ --ink:#1a2238; --muted:#697089; --line:#e6e9f1; --green:#1b7a3d; --green-dark:#13235a;
+    --gk:#2f6fb0; --d:#c98a1a; --m:#3a8a4a; --f:#c0392b; --bg:#f4f6fb; --card:#fff; --accent:#1b7a3d; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--ink);
+    -webkit-text-size-adjust:100%;padding-bottom:40px;}
+  header{position:sticky;top:0;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);
+    padding:10px 14px;display:flex;align-items:center;gap:10px;z-index:10;}
+  header .eyebrow{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:700;}
+  header h1{margin:1px 0 0;font-size:17px;}
+  header .sub{font-size:11.5px;color:var(--muted);}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;background:#eef1f7;color:var(--muted);}
+  .pill.live{background:#e23b3b;color:#fff;} .pill.final{background:var(--green-dark);color:#fff;}
+  main{max-width:640px;margin:0 auto;padding:12px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;}
+  .muted{color:var(--muted);}
+  .row{display:flex;gap:8px;} .between{justify-content:space-between;} .center{align-items:center;}
+  .teamtabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;}
+  .teamtabs button{flex:0 0 auto;background:#fff;border:1px solid var(--line);border-radius:20px;padding:7px 14px;font-size:13px;font-weight:600;color:var(--ink);}
+  .teamtabs button.active{background:var(--green-dark);color:#fff;border-color:var(--green-dark);}
+
+  /* Scoreboard */
+  .score{display:flex;align-items:center;justify-content:center;gap:18px;padding:6px 0 2px;}
+  .score .team{flex:1;text-align:center;}
+  .score .team .nm{font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .score .team .n{font-size:44px;font-weight:800;line-height:1.05;color:var(--green-dark);}
+  .score .sep{font-size:24px;color:var(--muted);font-weight:700;}
+  .gamemeta{text-align:center;font-size:12.5px;color:var(--muted);margin-top:4px;}
+  .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e23b3b;margin-right:5px;vertical-align:middle;
+    animation:pulse 1.4s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  /* Goal feed */
+  .feed-item{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);}
+  .feed-item:last-child{border-bottom:none;}
+  .feed-ic{font-size:18px;flex:0 0 auto;}
+  .feed-main{flex:1;}
+  .feed-main .who{font-weight:700;font-size:14px;}
+  .feed-main .sub{font-size:12px;color:var(--muted);margin-top:1px;}
+
+  /* On-field list */
+  .grp{margin-top:8px;} .grp h4{margin:0 0 4px;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:#f2f5fa;border:1px solid var(--line);border-radius:20px;
+    padding:5px 11px 5px 6px;margin:0 6px 6px 0;font-size:13px;font-weight:600;}
+  .chip .no{width:22px;height:22px;border-radius:50%;background:var(--green-dark);color:#fff;font-size:11px;font-weight:800;
+    display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .chip.gk .no{background:var(--gk);} .chip.d .no{background:var(--d);} .chip.m .no{background:var(--m);} .chip.f .no{background:var(--f);}
+
+  /* Roster / minutes */
+  .pl-row{display:flex;align-items:center;gap:11px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .pl-row:last-child{border-bottom:none;}
+  .pl-no{width:30px;height:30px;border-radius:50%;background:var(--green-dark);color:#fff;font-weight:800;font-size:13px;
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+  .pl-name{font-weight:600;font-size:14px;flex:1;}
+  .pl-stat{font-size:12.5px;color:var(--muted);text-align:right;}
+  .pl-stat b{color:var(--ink);}
+  .sectiontitle{font-size:12px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin:2px 2px 8px;}
+  .fresh{text-align:center;font-size:11px;color:var(--muted);margin:2px 0 10px;}
+  .badge-on{font-size:10px;font-weight:800;color:#fff;background:var(--green);border-radius:5px;padding:1px 5px;margin-left:6px;vertical-align:middle;}
+</style>
+</head>
+<body>
+<header>
+  <div style="flex:1;min-width:0">
+    <div class="eyebrow">Follow along</div>
+    <h1 id="hdrTitle">Loading…</h1>
+    <div class="sub" id="hdrSub">&nbsp;</div>
+  </div>
+  <span class="pill" id="statePill">·</span>
+</header>
+<main id="app"><div class="card muted">Loading the latest…</div></main>
+
+<script>
+// PARENT VIEW — purely read-only. It reads the same published snapshot as the assistant viewer but
+// shows a family-friendly, coach-machinery-free page: scoreboard, goal feed (during a game), who's
+// on now, and per-player minutes/goals. No flags, no editing, no formation diagram, no notes.
+const params = new URLSearchParams(location.search);
+const SHARE_ID = params.get("s") || "";
+const SHARE_API = params.get("api") || "__SHARE_API__";
+
+let snap=null, activeTeamId=null, lastError=null, pollTimer=null, lastFetch=0;
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function firstName(n){ return String(n||"").trim().split(/\s+/)[0]||""; }
+
+async function fetchSnap(){
+  if(!SHARE_ID){ showFatal("No share code in this link. Ask the coach to resend it."); return; }
+  if(!SHARE_API || SHARE_API.indexOf("__SHARE_API__")===0){ showFatal("This page isn't configured yet."); return; }
+  try{
+    const r=await fetch(SHARE_API+"/snap/"+encodeURIComponent(SHARE_ID));
+    if(r.status===404){ showFatal("This link is no longer active. Ask the coach for the current one."); stopPoll(); return; }
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json(); snap=j.data; lastError=null; lastFetch=Date.now();
+    if(!activeTeamId && snap.teams && snap.teams.length) activeTeamId=snap.activeTeamId||snap.teams[0].id;
+    render();
+  }catch(e){ lastError=(e&&e.message)||"network"; render(); }
+}
+function startPoll(){ stopPoll(); pollTimer=setInterval(fetchSnap, 8000); }
+function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+
+function team(){ return (snap&&snap.teams||[]).find(t=>t.id===activeTeamId) || (snap&&snap.teams||[])[0] || null; }
+function latestGame(t){ if(!t||!t.games||!t.games.length) return null; return t.games[t.games.length-1]; }
+function periodType(g){ return g&&g.format&&g.format.periodType==="halves"?"halves":"quarters"; }
+function periodLabel(g,i){ return (periodType(g)==="halves"?"H":"Q")+(i+1); }
+function periodsOf(g){ return (g&&g.format&&g.format.periods)||(g&&g.quarters?g.quarters.length:4); }
+function qlen(q,g){ return (q&&q.len>0)?q.len:((g&&g.format&&g.format.periodLength)||12); }
+
+// A game is "live" if any period clock is running, or some but not all periods have run. If every
+// period's clock is untouched, it hasn't started; we treat a game with any elapsed time and an
+// unfinished last period as in progress. Coaches who use the app without the clock still get a sane
+// result: no clock data => we show it as the latest game without a LIVE badge.
+function clockElapsedSec(q,g){ if(!q||!q.clock) return 0; const c=q.clock; let ms=c.elapsedMs||0;
+  if(c.running&&c.startedAt) ms+=Math.max(0,Date.now()-c.startedAt); return Math.min(qlen(q,g)*60, Math.floor(ms/1000)); }
+function gameIsLive(g){
+  if(!g||!g.quarters) return false;
+  return g.quarters.some(q=>q.clock&&q.clock.running) ||
+    (g.quarters.some(q=>clockElapsedSec(q,g)>0) && g.quarters.some(q=>clockElapsedSec(q,g)<qlen(q,g)*60));
+}
+// Best guess at the "current" period: the last one with any elapsed time, else the first.
+function currentPeriodIdx(g){
+  let idx=0; for(let i=0;i<periodsOf(g);i++){ if(clockElapsedSec(g.quarters[i],g)>0) idx=i; } return idx;
+}
+
+function slotOccupantAt(q, slotId, minute){
+  const evs=(q.subs||[]).filter(x=>x.slot===slotId).slice().sort((a,b)=>a.minute-b.minute);
+  let occ=q.lineup[slotId]||null; evs.forEach(ev=>{ if(ev.minute<=minute) occ=ev.on; }); return occ;
+}
+function groupOf(sid){ if(sid==="gk")return"gk"; if(/^(lb|rb|cb|lcb|rcb|sw|d)/.test(sid))return"d";
+  if(/^(dm|cm|lm|rm|am|lcm|rcm|m)/.test(sid))return"m"; return"f"; }
+
+function render(){
+  if(!snap) return;
+  const t=team();
+  document.getElementById("hdrTitle").textContent = t?(t.name||"Team"):"Not shared yet";
+  const g=t?latestGame(t):null;
+  const live=g?gameIsLive(g):false;
+  const pill=document.getElementById("statePill");
+  if(lastError){ pill.textContent="offline"; pill.className="pill"; }
+  else if(live){ pill.textContent="LIVE"; pill.className="pill live"; }
+  else if(g){ pill.textContent="FINAL"; pill.className="pill final"; }
+  else { pill.textContent="·"; pill.className="pill"; }
+  document.getElementById("hdrSub").textContent = g?(g.opp?("vs "+g.opp):"Game")+(g.date?(" · "+g.date):""):"";
+
+  let h="";
+  // freshness line
+  if(lastFetch){ const secs=Math.round((Date.now()-lastFetch)/1000);
+    h+=`<div class="fresh">${lastError?"Can't reach the latest — retrying…":("Updated "+(secs<5?"just now":secs+"s ago")+" · refreshes on its own")}</div>`; }
+
+  // team switcher
+  if(snap.teams && snap.teams.length>1){
+    h+=`<div class="teamtabs">`+snap.teams.map(tt=>`<button class="${tt.id===activeTeamId?'active':''}" onclick="pickTeam('${tt.id}')">${esc(tt.name||'Team')}</button>`).join("")+`</div>`;
+  }
+
+  if(!t){ document.getElementById("app").innerHTML=h+`<div class="card muted">Nothing shared yet.</div>`; return; }
+  if(!g){ document.getElementById("app").innerHTML=h+`<div class="card muted">No games yet for ${esc(t.name||"this team")}.</div>`; return; }
+
+  h+=renderScoreboard(g,t,live);
+  // Goal feed: only while a game is live (per spec). Between games we still show the final score above,
+  // but the running feed is hidden until the next game starts.
+  if(live) h+=renderFeed(g,t);
+  if(live) h+=renderOnField(g,t);
+  h+=renderRoster(g,t,live);
+
+  document.getElementById("app").innerHTML=h;
+}
+
+function renderScoreboard(g,t,live){
+  const us=(g.goals||[]).length; const them=(g.them!==""&&g.them!=null)?g.them:0;
+  const usName=t.name||"Us"; const themName=g.opp||"Them";
+  let meta="";
+  if(live){ const qi=currentPeriodIdx(g); const q=g.quarters[qi];
+    const sec=clockElapsedSec(q,g); const mm=Math.floor(sec/60);
+    meta=`<span class="live-dot"></span>${periodLabel(g,qi)} · ${mm}′`;
+  } else {
+    meta=`Final`;
+  }
+  return `<div class="card">
+    <div class="score">
+      <div class="team"><div class="nm">${esc(usName)}</div><div class="n">${us}</div></div>
+      <div class="sep">–</div>
+      <div class="team"><div class="nm">${esc(themName)}</div><div class="n">${esc(String(them))}</div></div>
+    </div>
+    <div class="gamemeta">${meta}</div>
+  </div>`;
+}
+
+// Goal feed — our goals in order. We don't store goal minutes in the snapshot for every goal, so we
+// show them in the order logged; if a goal has a minute/period we show it, otherwise just the scorer.
+function renderFeed(g,t){
+  const nameOf=(pid)=>{ if(!pid) return "Unknown"; const p=(t.roster||[]).find(x=>x.id===pid); return p?firstName(p.name):"Unknown"; };
+  const goals=(g.goals||[]);
+  let items="";
+  if(!goals.length){ items=`<div class="muted" style="font-size:13px">No goals yet — check back!</div>`; }
+  else {
+    // newest first feels more "feed-like"
+    goals.slice().reverse().forEach(gl=>{
+      const sc=nameOf(gl.scorer);
+      const as=gl.assist?nameOf(gl.assist):null;
+      items+=`<div class="feed-item"><div class="feed-ic">⚽</div><div class="feed-main">
+        <div class="who">${esc(sc)}</div>
+        ${as?`<div class="sub">assist ${esc(as)}</div>`:""}
+      </div></div>`;
+    });
+  }
+  return `<div class="card"><div class="sectiontitle">Goals</div>${items}</div>`;
+}
+
+function renderOnField(g,t){
+  const qi=currentPeriodIdx(g); const q=g.quarters[qi];
+  const nameOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:""; };
+  const numOf=(pid)=>{ const p=(t.roster||[]).find(x=>x.id===pid); return p&&p.number?p.number:""; };
+  // who's on now = occupant of each slot at the current clock minute
+  const sec=clockElapsedSec(q,g); const minNow=sec/60;
+  const buckets={gk:[],d:[],m:[],f:[]};
+  Object.keys(q.lineup||{}).forEach(sid=>{ const occ=slotOccupantAt(q,sid,minNow); if(occ) buckets[groupOf(sid)].push(occ); });
+  const label={gk:"Goal",d:"Defense",m:"Midfield",f:"Attack"};
+  let body="";
+  ["gk","d","m","f"].forEach(gp=>{ if(!buckets[gp].length) return;
+    body+=`<div class="grp"><h4>${label[gp]}</h4>`;
+    buckets[gp].forEach(pid=>{ const no=numOf(pid);
+      body+=`<span class="chip ${gp}"><span class="no">${esc(no||firstName(nameOf(pid))[0]||"?")}</span>${esc(firstName(nameOf(pid)))}</span>`; });
+    body+=`</div>`;
+  });
+  if(!body) body=`<div class="muted" style="font-size:13px">Lineup not set yet.</div>`;
+  return `<div class="card"><div class="sectiontitle">On the field now · ${periodLabel(g,qi)}</div>${body}</div>`;
+}
+
+// Per-kid stats. During a live game: today's minutes. Otherwise: season totals. Goals/assists always
+// season-to-date so there's something to show between games. No fairness/target flags anywhere.
+function renderRoster(g,t,live){
+  const roster=t.roster||[];
+  // today's minutes (schedule-based, same math as the app's planned minutes)
+  const today=todayMinutes(g);
+  // season totals across all this team's games
+  const season=seasonTotals(t);
+  const numOf=(p)=>p.number||firstName(p.name)[0]||"?";
+  const rows=roster.slice().sort((a,b)=>{
+    // sort by today's minutes desc during a game, else by name
+    if(live) return (today[b.id]||0)-(today[a.id]||0);
+    return String(a.name).localeCompare(String(b.name));
+  });
+  let body="";
+  rows.forEach(p=>{
+    const s=season[p.id]||{min:0,goals:0,assists:0,games:0};
+    const onNow = live && isOnFieldNow(g,p.id);
+    const minLabel = live ? (Math.round((today[p.id]||0))+"′ today") : (Math.round(s.min)+"′ season");
+    const ga = (s.goals||s.assists) ? `${s.goals||0} G · ${s.assists||0} A` : "";
+    body+=`<div class="pl-row">
+      <div class="pl-no">${esc(numOf(p))}</div>
+      <div class="pl-name">${esc(p.name)}${onNow?`<span class="badge-on">ON</span>`:""}</div>
+      <div class="pl-stat"><b>${esc(minLabel)}</b>${ga?`<br>${esc(ga)}`:""}</div>
+    </div>`;
+  });
+  const title = live ? "Players · minutes today" : "Players · season";
+  return `<div class="card"><div class="sectiontitle">${title}</div>${body||'<div class="muted">No players.</div>'}</div>`;
+}
+
+function isOnFieldNow(g,pid){
+  const qi=currentPeriodIdx(g); const q=g.quarters[qi]; const minNow=clockElapsedSec(q,g)/60;
+  return Object.keys(q.lineup||{}).some(sid=>slotOccupantAt(q,sid,minNow)===pid);
+}
+
+// Minutes played so far in THIS game, schedule-based to the current clock time per period.
+function todayMinutes(g){
+  const mins={}; const P=periodsOf(g);
+  for(let qi=0;qi<P;qi++){ const q=g.quarters[qi]; const len=qlen(q,g);
+    const upto = Math.max(clockElapsedSec(q,g)/60, 0) || len; // if no clock, credit full period
+    const cap = (g.quarters[qi].clock && (clockElapsedSec(q,g)>0)) ? clockElapsedSec(q,g)/60 : len;
+    const slotIds=new Set([...Object.keys(q.lineup||{}), ...((q.subs||[]).map(s=>s.slot))]);
+    slotIds.forEach(sid=>{
+      const evs=(q.subs||[]).filter(x=>x.slot===sid).slice().sort((a,b)=>a.minute-b.minute);
+      let cur=q.lineup[sid]||null, tprev=0;
+      const credit=(pid,a,b)=>{ if(pid&&b>a) mins[pid]=(mins[pid]||0)+(b-a); };
+      evs.forEach(ev=>{ const m=Math.max(0,Math.min(cap,ev.minute)); credit(cur,tprev,m); cur=ev.on; tprev=m; });
+      credit(cur,tprev,cap);
+    });
+  }
+  return mins;
+}
+
+// Season totals across all the team's games (minutes schedule-based to full periods; goals/assists counted).
+function seasonTotals(t){
+  const tot={};
+  (t.games||[]).forEach(g=>{
+    const P=periodsOf(g);
+    for(let qi=0;qi<P;qi++){ const q=g.quarters[qi]; if(!q) continue; const len=qlen(q,g);
+      const slotIds=new Set([...Object.keys(q.lineup||{}), ...((q.subs||[]).map(s=>s.slot))]);
+      slotIds.forEach(sid=>{
+        const evs=(q.subs||[]).filter(x=>x.slot===sid).slice().sort((a,b)=>a.minute-b.minute);
+        let cur=q.lineup[sid]||null, tprev=0;
+        const credit=(pid,a,b)=>{ if(pid&&b>a){ tot[pid]=tot[pid]||{min:0,goals:0,assists:0}; tot[pid].min+=(b-a); } };
+        evs.forEach(ev=>{ const m=Math.max(0,Math.min(len,ev.minute)); credit(cur,tprev,m); cur=ev.on; tprev=m; });
+        credit(cur,tprev,len);
+      });
+    }
+    (g.goals||[]).forEach(gl=>{ if(gl.scorer){ tot[gl.scorer]=tot[gl.scorer]||{min:0,goals:0,assists:0}; tot[gl.scorer].goals++; }
+      if(gl.assist){ tot[gl.assist]=tot[gl.assist]||{min:0,goals:0,assists:0}; tot[gl.assist].assists++; } });
+  });
+  return tot;
+}
+
+function pickTeam(id){ activeTeamId=id; render(); }
+function showFatal(msg){ document.getElementById("app").innerHTML=`<div class="card"><b>Can't open this page</b><div class="muted" style="margin-top:6px;font-size:14px">${esc(msg)}</div></div>`; document.getElementById("hdrTitle").textContent="Unavailable"; }
+
+fetchSnap(); startPoll();
+setInterval(()=>{ if(snap) render(); }, 1000); // tick the clock/freshness display between fetches
+</script>
+</body>
+</html>
