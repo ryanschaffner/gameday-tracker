@@ -622,10 +622,21 @@ function confirmFlag(fid){
     alert((f.label||"Tired flag")+" applied.");
     return;
   }
-  // sub / goal / note: open the game and the relevant dialog, then drop the flag
+  // goal: the assistant already picked scorer + assist, so apply it directly (with a quick confirm)
+  // instead of reopening an empty dialog. scorer/assist ride along on the flag as player ids.
+  if(f.type==="goal"){
+    if(!g){ alert("Couldn't find the game for this goal."); clearFlags([fid]); return; }
+    const scorer=f.scorer||null; let assist=f.assist||null; if(assist&&assist===scorer) assist=null;
+    const nm=(pid)=>{ if(!pid) return "Unknown/own goal"; const t=activeTeam(); const p=(t.roster||[]).find(x=>x.id===pid); return p?p.name:"Unknown"; };
+    const msg="Add goal — "+nm(scorer)+(assist?(" (assist "+nm(assist)+")"):"")+"?";
+    if(!confirm(msg)){ return; } // leave the flag in the queue if they decline
+    g.goals=g.goals||[]; g.goals.push({id:uid("gl"),scorer,assist}); g.us=g.goals.length; save();
+    clearFlags([fid]);
+    return;
+  }
+  // sub / note: open the game and the relevant dialog, then drop the flag
   if(g){ ui.gameId=g.id; ui.view="game"; ui.qi=Math.min(ui.qi, gPeriods(g)-1); render();
-    if(f.type==="goal"){ openGoal(); }
-    else if(f.type==="sub"){ openSub(ui.qi); }
+    if(f.type==="sub"){ openSub(ui.qi); }
     clearFlags([fid]);
     return;
   }
@@ -2524,11 +2535,20 @@ function renderShare(){
     _flags.slice().sort((a,b)=>a.at-b.at).forEach(f=>{
       const team=store.teams.find(t=>t.id===f.teamId);
       const icon=f.type==="goal"?"⚽":(f.type==="sub"?"⇄":(f.type==="tired"?"😓":"•"));
-      const nm=f.pid&&team? (()=>{ const p=team.roster.find(x=>x.id===f.pid); return p?p.name:(f.label||"Player"); })() : (f.label||"Note");
+      const pname=(pid)=>{ if(!pid) return null; const p=team&&team.roster.find(x=>x.id===pid); return p?p.name:null; };
+      let title;
+      if(f.type==="goal"){
+        const sc=pname(f.scorer)||"Unknown/own goal";
+        const as=pname(f.assist);
+        title=`⚽ Goal — ${esc(sc)}${as?` <span class="muted" style="font-weight:500">(assist ${esc(as)})</span>`:""}`;
+      } else {
+        const nm=f.pid&&team? (pname(f.pid)||f.label||"Player") : (f.label||"Note");
+        title=`${icon} ${esc(f.label||f.type)} — ${esc(nm)}`;
+      }
       const t=new Date(f.at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
       h+=`<div class="card" style="margin-bottom:8px"><div class="row between" style="align-items:center">
         <div style="flex:1;min-width:0">
-          <div style="font-weight:700;font-size:14px">${icon} ${esc(f.label||f.type)} — ${esc(nm)}</div>
+          <div style="font-weight:700;font-size:14px">${title}</div>
           <div class="muted" style="font-size:11.5px;margin-top:2px">${team?esc(team.name)+" · ":""}${f.by?"from "+esc(f.by)+" · ":""}${t}</div>
         </div>
         <div class="row" style="gap:6px;flex:0 0 auto">
