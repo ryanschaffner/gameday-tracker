@@ -47,6 +47,9 @@
     color:var(--muted);font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;}
   nav.tabbar button .ic{font-size:19px;line-height:1;}
   nav.tabbar button.active{color:var(--green);}
+  nav.tabbar button{position:relative;}
+  .flagdot{position:absolute;top:4px;right:calc(50% - 22px);min-width:16px;height:16px;padding:0 4px;border-radius:9px;
+    background:#e23b3b;color:#fff;font-size:10px;font-weight:800;line-height:16px;text-align:center;}
   /* cards & buttons */
   .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;margin:11px 0;
     box-shadow:0 1px 3px rgba(0,0,0,.04);}
@@ -241,9 +244,9 @@
 <header>
   <div class="hdrwrap">
     <div class="crest">⚽</div>
-    <div style="flex:1;min-width:0">
+    <div style="flex:1;min-width:0;cursor:pointer" onclick="openTeamSwitcher()" title="Switch team">
       <div class="eyebrow">Game Day Tracker</div>
-      <h1 id="hdr-title">St. Mary Girls</h1>
+      <h1 id="hdr-title">St. Mary Girls <span id="hdr-caret" style="font-size:13px;opacity:.6">▾</span></h1>
       <div class="sub" id="hdr-sub">8v8 · 4 × 12 min</div>
     </div>
     <button id="themeToggle" class="btn ghost sm" style="flex:0 0 auto" onclick="toggleDarkMode()" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
@@ -256,6 +259,7 @@
   <button data-nav="games"><span class="ic">📋</span>Games</button>
   <button data-nav="season"><span class="ic">📊</span>Season</button>
   <button data-nav="roster"><span class="ic">👥</span>Roster</button>
+  <button data-nav="share"><span class="ic">📡</span>Share</button>
   <button data-nav="backup"><span class="ic">💾</span>Backup</button>
 </nav>
 
@@ -264,7 +268,40 @@
 <script>
 "use strict";
 //// ---------- Formations ----------
+// QLEN is the fallback/default period length in minutes. Real games carry their own length on
+// each period object (q.len) and their structure on g.format, so QLEN is only used for brand-new
+// data and as a safety fallback for old saves that predate configurable game formats.
 const QLEN = 12;
+// A game's format: how many periods, what they're called, and how long each is. Teams store a
+// default format; each game copies it at creation (g.format) so editing the team default later
+// never rewrites past games. Only two structures are supported: 4 quarters or 2 halves.
+function defaultFormat(){ return {periodType:"quarters", periods:4, periodLength:QLEN}; }
+function normalizeFormat(f){
+  f=f||{};
+  const type = f.periodType==="halves" ? "halves" : "quarters";
+  const periods = type==="halves" ? 2 : 4;
+  let len = parseFloat(f.periodLength); if(!(len>0)) len=QLEN;
+  return {periodType:type, periods, periodLength:len};
+}
+// Length (minutes) of a specific period object. Prefers the length stamped on the period, then the
+// game's format, then the global default — so every clock/minutes calc uses the right number.
+function qlen(q){ return (q && q.len>0) ? q.len : QLEN; }
+// The game a period belongs to isn't always in scope, so callers that have the game use gLen(g).
+function gLen(g){ return (g && g.format && g.format.periodLength>0) ? g.format.periodLength : QLEN; }
+function gPeriods(g){ return (g && g.format && g.format.periods) ? g.format.periods : 4; }
+function periodType(g){ return (g && g.format && g.format.periodType==="halves") ? "halves" : "quarters"; }
+// Short label for a period, 0-indexed: "Q1"/"Q2"… for quarters, "H1"/"H2" for halves.
+function periodLabel(g,i){ return (periodType(g)==="halves"?"H":"Q")+(i+1); }
+// Longer label: "quarter"/"half" for prose.
+function periodWord(g){ return periodType(g)==="halves"?"half":"quarter"; }
+// Which half (0 or 1) a period index falls in. Quarters: 0,1→0 and 2,3→1. Halves: 0→0, 1→1.
+// This is the single source of truth for keeper-by-half logic across both structures.
+function halfOfPeriod(g,i){ return periodType(g)==="halves" ? i : (i<2?0:1); }
+// The period indices making up a given half (0=first,1=second), for keeper assignment loops.
+function periodsInHalf(g,half){
+  if(periodType(g)==="halves") return [half];
+  return half===0?[0,1]:[2,3];
+}
 const FORMATIONS = {
   "3-3-1": {label:"3-3-1", size:8, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
@@ -287,7 +324,28 @@ const FORMATIONS = {
     {id:"dm",pos:"DM",grp:"M",x:50,y:60},
     {id:"lm",pos:"LM",grp:"M",x:30,y:44},{id:"rm",pos:"RM",grp:"M",x:70,y:44},
     {id:"st",pos:"ST",grp:"F",x:50,y:26}]},
-  // 7v7 fallbacks (6 outfield + GK) — used automatically when fewer than 8 are present
+  // 9v9 formations (8 outfield + GK)
+  "3-3-2 (9v9)": {label:"3-3-2 · 9v9", size:9, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:22,y:50},{id:"cm",pos:"CM",grp:"M",x:50,y:52},{id:"rm",pos:"RM",grp:"M",x:78,y:50},
+    {id:"lf",pos:"LF",grp:"F",x:35,y:28},{id:"rf",pos:"RF",grp:"F",x:65,y:28}]},
+  "3-4-1 (9v9)": {label:"3-4-1 · 9v9", size:9, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:18,y:52},{id:"lcm",pos:"CM",grp:"M",x:40,y:53},{id:"rcm",pos:"CM",grp:"M",x:60,y:53},{id:"rm",pos:"RM",grp:"M",x:82,y:52},
+    {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
+  "2-4-2 (9v9)": {label:"2-4-2 · 9v9", size:9, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:32,y:74},{id:"rb",pos:"RB",grp:"D",x:68,y:74},
+    {id:"lm",pos:"LM",grp:"M",x:18,y:52},{id:"lcm",pos:"CM",grp:"M",x:40,y:53},{id:"rcm",pos:"CM",grp:"M",x:60,y:53},{id:"rm",pos:"RM",grp:"M",x:82,y:52},
+    {id:"lf",pos:"LF",grp:"F",x:35,y:28},{id:"rf",pos:"RF",grp:"F",x:65,y:28}]},
+  "3-2-3 (9v9)": {label:"3-2-3 · 9v9", size:9, slots:[
+    {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
+    {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
+    {id:"lcm",pos:"CM",grp:"M",x:35,y:54},{id:"rcm",pos:"CM",grp:"M",x:65,y:54},
+    {id:"lf",pos:"LF",grp:"F",x:24,y:28},{id:"cf",pos:"CF",grp:"F",x:50,y:26},{id:"rf",pos:"RF",grp:"F",x:76,y:28}]},
+  // 7v7 formations (6 outfield + GK)
   "2-3-1 (7v7)": {label:"2-3-1 · 7v7", size:7, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:28,y:74},{id:"rb",pos:"RB",grp:"D",x:72,y:74},
@@ -298,7 +356,7 @@ const FORMATIONS = {
     {id:"lb",pos:"LB",grp:"D",x:22,y:74},{id:"cb",pos:"CB",grp:"D",x:50,y:73},{id:"rb",pos:"RB",grp:"D",x:78,y:74},
     {id:"lm",pos:"LM",grp:"M",x:32,y:52},{id:"rm",pos:"RM",grp:"M",x:68,y:52},
     {id:"st",pos:"ST",grp:"F",x:50,y:28}]},
-  // 6v6 fallbacks (5 outfield + GK)
+  // 6v6 formations (5 outfield + GK)
   "2-2-1 (6v6)": {label:"2-2-1 · 6v6", size:6, slots:[
     {id:"gk",pos:"GK",grp:"GK",x:50,y:90},
     {id:"lb",pos:"LB",grp:"D",x:30,y:74},{id:"rb",pos:"RB",grp:"D",x:70,y:74},
@@ -313,14 +371,29 @@ const FORMATIONS = {
 // All formation keys of a given total-player size (GK + outfield), largest-size-first for
 // "closest fit at or below N" lookups.
 function formationsOfSize(n){ return Object.keys(FORMATIONS).filter(k=>FORMATIONS[k].size===n); }
+// Sizes we offer as standard, largest first, for building "pick any formation" dropdowns.
+const FORMATION_SIZES=[9,8,7,6];
+// Build <optgroup>-organized <option>s for every formation, marking `sel` as selected.
+// Used by the default-formation pickers (team setup, roster settings) and the kickoff picker.
+function formationOptionsHTML(sel){
+  return FORMATION_SIZES.map(sz=>{
+    const keys=formationsOfSize(sz); if(!keys.length) return "";
+    const opts=keys.map(f=>`<option value="${f}" ${sel===f?'selected':''}>${FORMATIONS[f].label}</option>`).join("");
+    return `<optgroup label="${sz}v${sz}">${opts}</optgroup>`;
+  }).join("");
+}
 // Best-fit formation for however many players are actually present. Prefers an exact match
-// (8/7/6); if present count doesn't land exactly on one of those, uses the largest supported
+// (9/8/7/6); if present count doesn't land exactly on one of those, uses the largest supported
 // size that doesn't exceed it, so we never assume more players than are there. Below 6, falls
 // back to the smallest supported shape (6v6) — some slots will just show as open, same as today.
-function bestFormationFor(n){
-  const sizes=[8,7,6];
+// If a default formation is set, that shape's size is preferred as the target when it fits the
+// present count, so a coach who's set (say) a 9v9 default keeps it whenever 9 show up.
+function bestFormationFor(n,prefer){
+  const sizes=[9,8,7,6];
   let target=sizes.find(s=>s===n);
   if(!target) target=sizes.filter(s=>s<=n).sort((a,b)=>b-a)[0] || 6;
+  // A caller-supplied preferred formation (e.g. the game's kickoff choice) wins when it fits.
+  if(prefer && FORMATIONS[prefer] && FORMATIONS[prefer].size===target) return prefer;
   const cur=state.settings.defaultFormation;
   if(FORMATIONS[cur] && FORMATIONS[cur].size===target) return cur;
   return formationsOfSize(target)[0];
@@ -346,29 +419,248 @@ function jerseySVG(grp,label,mode){
 
 //// ---------- State ----------
 const KEY = "soccerGameTrackerV1";
+// Sharing backend (Cloudflare Worker). Leave "" to disable all sharing UI until you've deployed
+// the Worker (see SHARING-SETUP.md), then paste your Worker URL here with NO trailing slash, e.g.
+// const SHARE_API = "https://gameday-share.yoursubdomain.workers.dev";
+const SHARE_API = "";
 // dismissedAlerts / activeSubAlert / _lastAlertKey are sub-timing-alert UI state — intentionally
 // NOT saved to localStorage (see save()); they're a live sideline aid, not game history, and
 // resetting on reload/game-switch is the right behavior.
 let state, ui = {view:"games", gameId:null, qi:0, dismissedAlerts:{}, activeSubAlert:null, _lastAlertKey:undefined, massOverride:{}};
 
-function blankQuarter(f){ return {formation:f, lineup:{}, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}}; }
-function defaultState(){
-  return { roster:[], games:[], settings:{defaultFormation:"3-3-1", teamName:"", subAlertThreshold:6, darkMode:false} };
+function blankQuarter(f,len){ return {formation:f, len:(len>0?len:QLEN), lineup:{}, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}}; }
+
+// ---- Multi-team data model ----
+// On disk the app stores a `store`: { teams:[{id,name,roster,games,settings}], activeTeamId, darkMode }.
+// At runtime `state` is a live view onto the ACTIVE team — state.roster / state.games / state.settings
+// point straight at that team's objects, so every existing function keeps working unchanged. save()
+// writes the whole store back. Dark mode is app-wide (stored on the store, mirrored into each team's
+// settings so the existing settings.darkMode reads still work).
+let store = null; // the full on-disk object; `state` (declared above) is the active team's view
+
+function defaultTeamSettings(){ return {defaultFormation:"3-3-1", teamName:"", subAlertThreshold:6, darkMode:false, format:defaultFormat()}; }
+function blankTeam(nameArg){
+  const nm = nameArg||"";
+  const s = defaultTeamSettings(); s.teamName=nm;
+  return { id:uid("t"), name:nm, roster:[], games:[], settings:s };
+}
+function defaultStore(){
+  const t=blankTeam("");
+  return { teams:[t], activeTeamId:t.id, darkMode:false };
+}
+// Normalize any one team object: ensure settings, per-game clocks/out lists exist. (Same migrations
+// that used to run in load(), now applied per team.)
+function normalizeTeam(t){
+  if(!t.settings) t.settings=defaultTeamSettings();
+  if(t.settings.subAlertThreshold==null) t.settings.subAlertThreshold=6;
+  if(t.settings.darkMode==null) t.settings.darkMode=false;
+  if(t.settings.defaultFormation==null) t.settings.defaultFormation="3-3-1";
+  t.settings.format=normalizeFormat(t.settings.format); // older saves get the default 4×12 quarters
+  if(!t.name) t.name=t.settings.teamName||"My Team";
+  if(!Array.isArray(t.roster)) t.roster=[];
+  if(!Array.isArray(t.games)) t.games=[];
+  t.games.forEach(g=>{
+    // Back-fill a format on legacy games: they were all 4 quarters × 12 min.
+    if(!g.format) g.format=normalizeFormat({periodType:"quarters",periods:(g.quarters?g.quarters.length:4),periodLength:QLEN});
+    else g.format=normalizeFormat(g.format);
+    (g.quarters||[]).forEach(q=>{
+      if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0};
+      if(!(q.len>0)) q.len=g.format.periodLength; // stamp per-period length for the minutes engine
+    });
+    if(!g.out) g.out=[];
+    if(!g.formationChoice) g.formationChoice=(g.quarters&&g.quarters[0]?g.quarters[0].formation:t.settings.defaultFormation);
+  });
+  return t;
+}
+// Convert whatever's in localStorage into the multi-team store shape. Handles three cases:
+//  1) already a store (has teams[]) — just normalize;
+//  2) a legacy single-team save (has roster/games/settings at top level) — wrap it as team #1;
+//  3) nothing / unparseable — fresh default store.
+function toStore(obj){
+  if(obj && Array.isArray(obj.teams)){
+    obj.teams.forEach(normalizeTeam);
+    if(!obj.teams.length) obj.teams.push(blankTeam(""));
+    if(!obj.activeTeamId || !obj.teams.find(t=>t.id===obj.activeTeamId)) obj.activeTeamId=obj.teams[0].id;
+    if(obj.darkMode==null) obj.darkMode=!!(obj.teams[0].settings&&obj.teams[0].settings.darkMode);
+    return obj;
+  }
+  if(obj && (obj.roster||obj.games||obj.settings)){
+    const t=normalizeTeam({ id:uid("t"), name:(obj.settings&&obj.settings.teamName)||"My Team",
+      roster:obj.roster||[], games:obj.games||[], settings:obj.settings||defaultTeamSettings() });
+    return { teams:[t], activeTeamId:t.id, darkMode:!!(t.settings.darkMode) };
+  }
+  return defaultStore();
+}
+function activeTeam(){ return store.teams.find(t=>t.id===store.activeTeamId) || store.teams[0]; }
+// Point the runtime `state` view at the active team and sync app-wide dark mode into its settings.
+function bindActiveTeam(){
+  const t=activeTeam();
+  t.settings.darkMode=!!store.darkMode; // keep the per-team flag the UI reads in step with the app-wide one
+  state = { roster:t.roster, games:t.games, settings:t.settings };
 }
 function load(){
-  try{ const r=localStorage.getItem(KEY); state = r? JSON.parse(r): defaultState(); }
-  catch(e){ state = defaultState(); }
-  if(!state.settings) state.settings={defaultFormation:"3-3-1",teamName:"",subAlertThreshold:6,darkMode:false};
-  // migrate older saves missing the sub-alert threshold setting
-  if(state.settings.subAlertThreshold==null) state.settings.subAlertThreshold=6;
-  if(state.settings.darkMode==null) state.settings.darkMode=false;
-  // migrate older saved games that don't have a clock yet, or an `out` (injured/done-for-the-day) list
-  (state.games||[]).forEach(g=>{
-    (g.quarters||[]).forEach(q=>{ if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0}; });
-    if(!g.out) g.out=[];
-  });
+  let obj=null;
+  try{ const r=localStorage.getItem(KEY); obj = r? JSON.parse(r): null; }catch(e){ obj=null; }
+  store = toStore(obj);
+  bindActiveTeam();
 }
-function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
+// Persist: fold the runtime view back onto the active team object, then write the whole store.
+function save(){
+  try{
+    const t=activeTeam();
+    t.roster=state.roster; t.games=state.games; t.settings=state.settings;
+    t.name=state.settings.teamName||t.name||"My Team";
+    store.darkMode=!!state.settings.darkMode;
+    localStorage.setItem(KEY, JSON.stringify(store));
+  }catch(e){}
+  schedulePublish(); // if sharing is on, push an updated snapshot (debounced)
+}
+// ---- Sharing (view-only + flag queue) ----
+// Sharing is OFF unless SHARE_API is set (a deployed Worker) AND the coach has tapped Start sharing.
+// store.share = { id, editKey, on, lastPublishedAt, lastError }. The editKey is the secret that lets
+// THIS phone overwrite the snapshot; it never leaves the device except as the x-edit-key header.
+function shareEnabled(){ return !!SHARE_API; }
+function shareState(){ if(!store.share) store.share={id:null,editKey:null,on:false,lastPublishedAt:0,lastError:null}; return store.share; }
+function shareLink(){ const s=shareState(); if(!s.id) return ""; return location.origin+location.pathname.replace(/index\.html$/,"")+"viewer.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); }
+function randToken(n){ // url-safe random id/key
+  const a=new Uint8Array(n); (crypto.getRandomValues?crypto.getRandomValues(a):a.forEach((_,i)=>a[i]=Math.floor(Math.random()*256)));
+  return btoa(String.fromCharCode(...a)).replace(/[+/=]/g,c=>({"+":"-","/":"_","=":""}[c])).slice(0,n);
+}
+// The read-only snapshot assistants receive. It's the whole store MINUS the secret share block —
+// never publish editKey. Everything else (teams, rosters, games, live lineups) is what they see.
+function buildSnapshot(){
+  const copy=JSON.parse(JSON.stringify(store));
+  delete copy.share;               // never expose the edit key or share plumbing
+  copy.publishedAt=Date.now();
+  return copy;
+}
+// Debounced auto-publish: called after any save() when sharing is on. Batches rapid edits (e.g.
+// dragging a lineup) into at most one write every few seconds, keeping us far under KV write limits.
+let _pubTimer=null;
+function schedulePublish(){
+  if(!shareEnabled()) return; const s=shareState(); if(!s.on||!s.id) return;
+  if(_pubTimer) return; // already queued
+  _pubTimer=setTimeout(()=>{ _pubTimer=null; publishNow(true); }, 4000);
+}
+async function publishNow(quiet){
+  if(!shareEnabled()){ if(!quiet) alert("Sharing isn't set up yet. See SHARING-SETUP.md."); return; }
+  const s=shareState(); if(!s.id||!s.editKey){ if(!quiet) alert("Start sharing first."); return; }
+  try{
+    const r=await fetch(SHARE_API+"/snap/"+s.id,{method:"PUT",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({editKey:s.editKey,data:buildSnapshot()})});
+    if(!r.ok){ throw new Error("HTTP "+r.status); }
+    s.lastPublishedAt=Date.now(); s.lastError=null;
+  }catch(e){ s.lastError=(e&&e.message)||"network"; }
+  saveRaw(); if(ui.view==="share") render();
+}
+// saveRaw writes the store without triggering another publish (avoids a publish→save→publish loop).
+function saveRaw(){ try{ localStorage.setItem(KEY, JSON.stringify(store)); }catch(e){} }
+async function startSharing(){
+  if(!shareEnabled()){ alert("Sharing isn't set up yet. See SHARING-SETUP.md — you'll paste your Worker URL into SHARE_API."); return; }
+  const s=shareState();
+  if(!s.id) s.id=randToken(12);
+  if(!s.editKey) s.editKey=randToken(24);
+  s.on=true; saveRaw();
+  await publishNow(true);
+  startFlagPolling();
+  render();
+}
+async function stopSharing(){
+  const s=shareState(); if(!s.id){ s.on=false; saveRaw(); render(); return; }
+  if(!confirm("Stop sharing? The current link will stop working for your assistants.")) return;
+  try{ await fetch(SHARE_API+"/snap/"+s.id,{method:"DELETE",headers:{"x-edit-key":s.editKey||""}}); }catch(e){}
+  s.on=false; stopFlagPolling(); saveRaw(); render();
+}
+async function rotateShareLink(){
+  const s=shareState();
+  if(!confirm("Make a brand-new link? The old one dies immediately — you'll need to resend the new link to your coaches.")) return;
+  try{ if(s.id) await fetch(SHARE_API+"/snap/"+s.id,{method:"DELETE",headers:{"x-edit-key":s.editKey||""}}); }catch(e){}
+  s.id=randToken(12); s.editKey=randToken(24); saveRaw();
+  await publishNow(true); render();
+}
+// ---- Flag queue (assistant-raised, coach-confirmed) ----
+let _flagTimer=null; let _flags=[];
+function startFlagPolling(){
+  if(!shareEnabled()) return; const s=shareState(); if(!s.on||!s.id) return;
+  stopFlagPolling();
+  const tick=async()=>{
+    try{
+      const r=await fetch(SHARE_API+"/flags/"+s.id,{headers:{"x-edit-key":s.editKey||""}});
+      if(r.ok){ const j=await r.json(); _flags=j.flags||[]; if(ui.view==="share") render(); updateFlagBadge(); }
+    }catch(e){}
+  };
+  tick();
+  _flagTimer=setInterval(tick, 8000); // gentle poll; well under free-tier read limits
+}
+function stopFlagPolling(){ if(_flagTimer){ clearInterval(_flagTimer); _flagTimer=null; } _flags=[]; updateFlagBadge(); }
+function updateFlagBadge(){
+  const btn=document.querySelector('nav.tabbar button[data-nav="share"]'); if(!btn) return;
+  let dot=btn.querySelector(".flagdot");
+  if(_flags.length){ if(!dot){ dot=document.createElement("span"); dot.className="flagdot"; btn.appendChild(dot);} dot.textContent=_flags.length; }
+  else if(dot){ dot.remove(); }
+}
+async function clearFlags(ids){
+  const s=shareState(); if(!s.id) return;
+  try{ await fetch(SHARE_API+"/flags/"+s.id+"/clear",{method:"POST",headers:{"Content-Type":"application/json","x-edit-key":s.editKey||""},
+    body:JSON.stringify({ids:ids||[]})}); }catch(e){}
+  if(ids&&ids.length){ _flags=_flags.filter(f=>!ids.includes(f.id)); } else { _flags=[]; }
+  updateFlagBadge(); if(ui.view==="share") render();
+}
+// Confirm a flag: take the coach to the right place to act on it. 'tired' applies directly (low risk);
+// 'sub'/'goal' switch to that team+game and open the matching dialog so the coach taps to finalize —
+// the coach's action is always what writes real data, so there's never a two-writer conflict.
+function confirmFlag(fid){
+  const f=_flags.find(x=>x.id===fid); if(!f) return;
+  // move to the flagged team + game if we can
+  if(f.teamId && store.teams.find(t=>t.id===f.teamId) && store.activeTeamId!==f.teamId){
+    store.activeTeamId=f.teamId; bindActiveTeam(); saveRaw();
+  }
+  const g=f.gameId ? state.games.find(x=>x.id===f.gameId) : null;
+  if(f.type==="tired"){
+    if(g && f.pid){ g.tired=g.tired||[]; if(!g.tired.includes(f.pid)) g.tired.push(f.pid); save(); }
+    clearFlags([fid]);
+    alert((f.label||"Tired flag")+" applied.");
+    return;
+  }
+  // sub / goal / note: open the game and the relevant dialog, then drop the flag
+  if(g){ ui.gameId=g.id; ui.view="game"; ui.qi=Math.min(ui.qi, gPeriods(g)-1); render();
+    if(f.type==="goal"){ openGoal(); }
+    else if(f.type==="sub"){ openSub(ui.qi); }
+    clearFlags([fid]);
+    return;
+  }
+  // couldn't resolve a game — just show it and clear
+  alert("Flag from "+(f.by||"assistant")+": "+(f.label||f.type)); clearFlags([fid]);
+}
+
+// ---- Team switching / CRUD ----
+function switchTeam(id){
+  if(!store.teams.find(t=>t.id===id)) return;
+  store.activeTeamId=id; bindActiveTeam();
+  ui.view="games"; ui.gameId=null; ui.qi=0; ui.activeSubAlert=null; ui._lastAlertKey=undefined;
+  closeSheet(); save(); applyTheme(); render(); window.scrollTo(0,0);
+}
+function addTeam(){
+  const nm=prompt("Name the new team:","");
+  if(nm===null) return; // cancelled
+  const t=blankTeam((nm||"").trim()||"New team");
+  store.teams.push(t); store.activeTeamId=t.id; bindActiveTeam();
+  ui.view="games"; ui.gameId=null; closeSheet(); save(); render(); window.scrollTo(0,0);
+}
+function renameTeam(id){
+  const t=store.teams.find(x=>x.id===id); if(!t) return;
+  const nm=(prompt("Rename team:", t.name||"")||"").trim();
+  if(!nm) return;
+  t.name=nm; t.settings.teamName=nm; save(); render(); openTeamSwitcher();
+}
+function deleteTeam(id){
+  if(store.teams.length<=1){ alert("You need at least one team. Rename this one or add another first."); return; }
+  const t=store.teams.find(x=>x.id===id); if(!t) return;
+  if(!confirm('Delete team "'+(t.name||"Untitled")+'" and ALL its games and roster? This cannot be undone.')) return;
+  store.teams=store.teams.filter(x=>x.id!==id);
+  if(store.activeTeamId===id) store.activeTeamId=store.teams[0].id;
+  bindActiveTeam(); ui.view="games"; ui.gameId=null; closeSheet(); save(); render();
+}
 function uid(p){ return p+Math.random().toString(36).slice(2,8); }
 function name(id){ const p=state.roster.find(x=>x.id===id); return p? p.name : "—"; }
 function fmt(m){ return (Math.round(m*10)/10).toString().replace(/\.0$/,""); }
@@ -376,15 +668,15 @@ function curGame(){ return state.games.find(g=>g.id===ui.gameId); }
 // Our score = number of logged goals (falls back to a manually-entered score for older games with none logged)
 function ourScore(g){ return Array.isArray(g.goals) ? g.goals.length : (parseInt(g.us)||0); }
 
-//// ---------- Quarter clock ----------
+//// ---------- Period clock ----------
 function clockElapsedSec(q){
   if(!q || !q.clock) return 0;
   const c=q.clock; let ms=c.elapsedMs||0;
   if(c.running && c.startedAt) ms+=Math.max(0,Date.now()-c.startedAt);
-  return Math.min(QLEN*60, Math.floor(ms/1000));
+  return Math.min(qlen(q)*60, Math.floor(ms/1000));
 }
 function clockRemainingLabel(q){
-  const rem=Math.max(0, QLEN*60-clockElapsedSec(q));
+  const rem=Math.max(0, qlen(q)*60-clockElapsedSec(q));
   const m=Math.floor(rem/60), s=rem%60;
   return m+":"+String(s).padStart(2,"0");
 }
@@ -395,7 +687,7 @@ function toggleClock(qi){
     q.clock.elapsedMs=(q.clock.elapsedMs||0)+Math.max(0,Date.now()-q.clock.startedAt);
     q.clock.running=false; q.clock.startedAt=null;
   } else {
-    if(clockElapsedSec(q)>=QLEN*60) return; // finished — nothing to resume, use Reset
+    if(clockElapsedSec(q)>=qlen(q)*60) return; // finished — nothing to resume, use Reset
     q.clock.running=true; q.clock.startedAt=Date.now();
   }
   save(); render();
@@ -410,7 +702,7 @@ function resetClock(qi){
 function clockMinuteNow(qi){
   const g=curGame(); if(!g) return null; const q=g.quarters[qi]; if(!q) return null;
   const sec=clockElapsedSec(q); if(sec<=0) return null;
-  return Math.min(QLEN, Math.round((sec/60)*2)/2);
+  return Math.min(qlen(q), Math.round((sec/60)*2)/2);
 }
 //// ---------- Sub-timing alert ----------
 // Two triggers, checked every tick while a quarter's clock is running:
@@ -447,7 +739,7 @@ function computeSubAlert(){
   if(cpIdx>=1){
     const key="cp:"+g.id+":"+qi+":"+cpIdx;
     if(!ui.dismissedAlerts[key]){
-      return {type:"checkpoint",key,msg:fmt(cpIdx*CP)+" min gone in Q"+(qi+1)+" — worth a quick playing-time check."};
+      return {type:"checkpoint",key,msg:fmt(cpIdx*CP)+" min gone in "+periodLabel(g,qi)+" — worth a quick playing-time check."};
     }
   }
   return null;
@@ -469,8 +761,8 @@ setInterval(()=>{
     const q=g.quarters[ui.qi]; if(!q || !q.clock) return;
     const el=document.getElementById("clockDisplay");
     if(el) el.textContent=clockRemainingLabel(q);
-    if(q.clock.running && clockElapsedSec(q)>=QLEN*60){
-      q.clock.elapsedMs=QLEN*60*1000; q.clock.running=false; q.clock.startedAt=null;
+    if(q.clock.running && clockElapsedSec(q)>=qlen(q)*60){
+      q.clock.elapsedMs=qlen(q)*60*1000; q.clock.running=false; q.clock.startedAt=null;
       save(); render(); return;
     }
     const alert=computeSubAlert();
@@ -486,20 +778,21 @@ setInterval(()=>{
 }, 500);
 
 //// ---------- Minutes engine ----------
-// Per quarter: walk each slot's timeline from lineup[slot] (minute 0) through subs (sorted), to QLEN.
+// Per period: walk each slot's timeline from lineup[slot] (minute 0) through subs (sorted), to qlen(q).
 function quarterStints(q){
   const slots = FORMATIONS[q.formation].slots;
+  const LEN=qlen(q);
   // 1) raw intervals per slot
   const raw=[];
   slots.forEach(s=>{
     const evs = (q.subs||[]).filter(x=>x.slot===s.id).slice().sort((a,b)=>a.minute-b.minute);
     let cur = q.lineup[s.id]||null, t=0;
     evs.forEach(ev=>{
-      let m=Math.max(0,Math.min(QLEN,ev.minute));
+      let m=Math.max(0,Math.min(LEN,ev.minute));
       if(cur && m>t) raw.push({pid:cur,slot:s.id,grp:s.grp,start:t,end:m});
       cur=ev.on; t=m;
     });
-    if(cur && QLEN>t) raw.push({pid:cur,slot:s.id,grp:s.grp,start:t,end:QLEN});
+    if(cur && LEN>t) raw.push({pid:cur,slot:s.id,grp:s.grp,start:t,end:LEN});
   });
   // 2) a player can't be in two places at once — clip overlapping intervals so each
   //    instant is counted once (earliest-starting slot wins the time). This caps any
@@ -536,11 +829,12 @@ function occupantSlotOf(q,pid,minute){
   return null;
 }
 function gameMinutes(g){
-  const m={}; // pid -> {total, grp:{}, q:[0,0,0,0]}
+  const P=gPeriods(g);
+  const m={}; // pid -> {total, grp:{}, q:[per-period]}
   g.quarters.forEach((q,qi)=>{
     quarterStints(q).forEach(st=>{
-      if(!m[st.pid]) m[st.pid]={total:0,grp:{GK:0,D:0,M:0,F:0},q:[0,0,0,0]};
-      m[st.pid].total+=st.min; m[st.pid].grp[st.grp]+=st.min; m[st.pid].q[qi]+=st.min;
+      if(!m[st.pid]) m[st.pid]={total:0,grp:{GK:0,D:0,M:0,F:0},q:new Array(P).fill(0)};
+      m[st.pid].total+=st.min; m[st.pid].grp[st.grp]+=st.min; if(m[st.pid].q[qi]!=null) m[st.pid].q[qi]+=st.min;
     });
   });
   return m;
@@ -557,7 +851,15 @@ function playerInQuarterMinutes(g,qi,pid){
 // there) so their already-logged minutes keep showing in the minutes table, summaries, and season
 // stats. Use this helper anywhere you're building a pool of who CAN still be picked to play.
 function activePresent(g){ const out=g.out||[]; return (g.present||[]).filter(p=>!out.includes(p)); }
-function fairShare(g){ const N=activePresent(g).length; if(!N) return 0; const fieldSize=Math.min(N,8); return Math.min(QLEN*4, fieldSize*QLEN*4 / N); }
+// Full-game minutes = period length × number of periods, from the game's own format.
+function gameTotalMin(g){ return gLen(g)*gPeriods(g); }
+// Outfield+GK field size for the game — from the formation actually planned, falling back to the
+// team default formation's size, so the fair-share target scales with 9v9/8v8/7v7/6v6.
+function gameFieldSize(g){
+  const fm=(g.quarters&&g.quarters[0]&&FORMATIONS[g.quarters[0].formation])?g.quarters[0].formation:(g.formationChoice||state.settings.defaultFormation);
+  return (FORMATIONS[fm]?FORMATIONS[fm].size:8);
+}
+function fairShare(g){ const N=activePresent(g).length; if(!N) return 0; const total=gameTotalMin(g); const fieldSize=Math.min(N,gameFieldSize(g)); return Math.min(total, fieldSize*total / N); }
 function targetFor(g){ const t=(g.targetMin!=null && g.targetMin!=="")? parseFloat(g.targetMin):NaN; return isNaN(t)? fairShare(g): t; }
 function ptStatus(total,target){ const tol=6; if(total<target-tol) return {k:"short",lbl:"▼ short"}; if(total>target+tol) return {k:"over",lbl:"▲ over"}; return {k:"on",lbl:"✓ on"}; }
 // Same ±6 tolerance as ptStatus, but returns the actual minute difference for the minutes-tracker
@@ -604,9 +906,9 @@ function keeperOptions(g,half){ const sel=(g.keepers&&g.keepers[half])||"";
   let o=`<option value="">— auto —</option>`;
   activePresent(g).forEach(pid=>{ o+=`<option value="${pid}" ${sel===pid?"selected":""}>${esc(name(pid))}${isGK(pid)?" 🧤":""}</option>`; });
   return o; }
-// The keeper for a given quarter: explicit half-keeper → Keep-GK continuity → keeper pool → none.
+// The keeper for a given period: explicit half-keeper → Keep-GK continuity → keeper pool → none.
 function keeperForQuarter(qi){ const g=curGame(); const k=g.keepers||{};
-  const who=qi<2?k.h1:k.h2;
+  const who=halfOfPeriod(g,qi)===0?k.h1:k.h2;
   if(who && activePresent(g).includes(who)) return who;
   return null;
 }
@@ -614,44 +916,47 @@ function keeperForQuarter(qi){ const g=curGame(); const k=g.keepers||{};
 function autoRotateGame(){
   const g=curGame(); const present=activePresent(g); const N=present.length;
   if(!N){ alert("Check players in first."); return; }
-  const fit=bestFormationFor(N);
-  if(N<6){ if(!confirm("Only "+N+" present (need at least 6 for a full side). Plan all 4 quarters anyway with some open spots?")) return; }
-  else if(!confirm("Auto-plan all 4 quarters ("+FORMATIONS[fit].label+") for even minutes? This replaces lineups you've set.")) return;
-  // 1) Decide the keeper for each quarter (explicit half-keepers first, then pool, then anyone).
+  const P=gPeriods(g), LEN=gLen(g), word=periodWord(g);
+  const fit=bestFormationFor(N, g.formationChoice);
+  if(N<6){ if(!confirm("Only "+N+" present (need at least 6 for a full side). Plan all "+P+" "+word+"s anyway with some open spots?")) return; }
+  else if(!confirm("Auto-plan all "+P+" "+word+"s ("+FORMATIONS[fit].label+") for even minutes? This replaces lineups you've set.")) return;
+  // 1) Decide the keeper for each period (explicit half-keepers first, then pool, then anyone).
   const poolPres=gkPoolPresent(); const kfb=poolPres.length?poolPres:present; const k=g.keepers||{};
   let kH1=(k.h1&&present.includes(k.h1))?k.h1:(g.keepGK!==false?(kfb[0]||null):null);
   let kH2=(k.h2&&present.includes(k.h2))?k.h2:(g.keepGK!==false?(kfb.find(p=>p!==kH1)||kfb[0]||null):null);
-  const keeperByQ=[0,1,2,3].map(q=>{
-    const ex=keeperForQuarter(q); if(ex) return ex;
-    if(g.keepGK!==false) return q<2?kH1:kH2;
-    return poolPres.length? poolPres[q%poolPres.length] : null; // keepGK off: rotate pool, else open
-  });
-  // 2) Allocate each quarter: keeper in goal (their goal minutes accrue here), lowest running plays outfield.
+  const keeperByQ=[];
+  for(let q=0;q<P;q++){
+    const ex=keeperForQuarter(q);
+    if(ex){ keeperByQ.push(ex); continue; }
+    if(g.keepGK!==false){ keeperByQ.push(halfOfPeriod(g,q)===0?kH1:kH2); continue; }
+    keeperByQ.push(poolPres.length? poolPres[q%poolPres.length] : null); // keepGK off: rotate pool, else open
+  }
+  // 2) Allocate each period: keeper in goal (their goal minutes accrue here), lowest running plays outfield.
   const running={}; present.forEach(p=>running[p]=0);
-  for(let q=0;q<4;q++){
+  for(let q=0;q<P;q++){
     const keeper=keeperByQ[q];
     const fm=fit;
     const slots=FORMATIONS[fm].slots;
     const lineup={}; let fillSlots, cand;
-    if(keeper){ lineup["gk"]=keeper; running[keeper]+=QLEN; fillSlots=slots.filter(s=>s.id!=="gk"); cand=present.filter(p=>p!==keeper); }
+    if(keeper){ lineup["gk"]=keeper; running[keeper]+=LEN; fillSlots=slots.filter(s=>s.id!=="gk"); cand=present.filter(p=>p!==keeper); }
     else { fillSlots=slots.slice(); cand=present.slice(); }
-    // who plays outfield: lowest running first; Q-tie breaks to earlier arrivals
+    // who plays outfield: lowest running first; period-tie breaks to earlier arrivals
     const order=cand.sort((a,b)=> (running[a]-running[b]) || (present.indexOf(a)-present.indexOf(b)) );
     let playOut=order.slice(0,fillSlots.length);
     let rot=playOut.slice(); if(rot.length){ const off=(q*3)%rot.length; rot=rot.slice(off).concat(rot.slice(0,off)); } // vary positions
     rot.forEach((pid,i)=>{ lineup[fillSlots[i].id]=pid; });
-    playOut.forEach(p=>{ running[p]+=QLEN; });
-    g.quarters[q]={formation:fm, lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
+    playOut.forEach(p=>{ running[p]+=LEN; });
+    g.quarters[q]={formation:fm, len:LEN, lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
   }
-  rebalanceAuto(g,present,keeperByQ);   // even out totals (spread to one quarter)
+  rebalanceAuto(g,present,keeperByQ);   // even out totals (spread to one period)
   protectKeepers(g,present,keeperByQ);  // and make sure keepers aren't the ones stuck playing a full game
   ui.qi=0; save(); render();
 }
-// Every keeper's outfield slots across the game's non-keeper quarters.
+// Every keeper's outfield slots across the game's non-keeper periods.
 function keeperOutfieldSlots(g,kp,keeperByQ){
-  const out=[];
-  for(let qi=0;qi<4;qi++){
-    if(keeperByQ[qi]===kp) continue; // this is a quarter they're in goal, not outfield
+  const out=[]; const P=gPeriods(g);
+  for(let qi=0;qi<P;qi++){
+    if(keeperByQ[qi]===kp) continue; // this is a period they're in goal, not outfield
     const slots=FORMATIONS[g.quarters[qi].formation].slots;
     slots.forEach(s=>{ if(s.id!=="gk" && g.quarters[qi].lineup[s.id]===kp) out.push({qi,slot:s.id}); });
   }
@@ -668,7 +973,7 @@ function protectKeepers(g,present,keeperByQ){
     if(keeperOutfieldSlots(g,kp,keeperByQ).length) return; // already has at least one — nothing to guarantee
     const t=autoTotals(g,present);
     let bestQ=-1, bestSlot=null, bestOccTotal=-1;
-    for(let qi=0;qi<4;qi++){
+    for(let qi=0;qi<gPeriods(g);qi++){
       if(keeperByQ[qi]===kp) continue;
       FORMATIONS[g.quarters[qi].formation].slots.forEach(s=>{
         if(s.id==="gk") return;
@@ -683,8 +988,8 @@ function protectKeepers(g,present,keeperByQ){
     const t=autoTotals(g,present); let moved=false;
     for(const kp of keepers){
       if(keeperOutfieldSlots(g,kp,keeperByQ).length<=1) continue; // never take away their last outfield slot
-      for(let q=0;q<4 && !moved;q++){
-        if(keeperByQ[q]===kp) continue;                 // this is a quarter the keeper is in goal — leave it
+      for(let q=0;q<gPeriods(g) && !moved;q++){
+        if(keeperByQ[q]===kp) continue;                 // this is a period the keeper is in goal — leave it
         const slots=FORMATIONS[g.quarters[q].formation].slots;
         let kpSlot=null; slots.forEach(s=>{ if(s.id!=="gk" && g.quarters[q].lineup[s.id]===kp) kpSlot=s.id; });
         if(!kpSlot) continue;                            // keeper isn't playing outfield this quarter
@@ -697,21 +1002,22 @@ function protectKeepers(g,present,keeperByQ){
     if(!moved) break;
   }
 }
-// Total minutes per player in an auto-plan (no subs) = 12 per slot occupied, including goal.
+// Total minutes per player in an auto-plan (no subs) = period length per slot occupied, incl. goal.
 function autoTotals(g,present){ const t={}; present.forEach(p=>t[p]=0);
-  g.quarters.forEach(q=>{ FORMATIONS[q.formation].slots.forEach(s=>{ const pid=q.lineup[s.id]; if(pid&&t[pid]!=null) t[pid]+=QLEN; }); }); return t; }
+  g.quarters.forEach(q=>{ FORMATIONS[q.formation].slots.forEach(s=>{ const pid=q.lineup[s.id]; if(pid&&t[pid]!=null) t[pid]+=qlen(q); }); }); return t; }
 // Local-search: repeatedly move the highest-total player out of an outfield slot for the lowest-total benched player.
 function rebalanceAuto(g,present,keeperByQ){
+  const LEN=gLen(g), P=gPeriods(g);
   for(let iter=0;iter<400;iter++){
     const t=autoTotals(g,present);
     let hi=present[0], lo=present[0];
     present.forEach(p=>{ if(t[p]>t[hi])hi=p; if(t[p]<t[lo])lo=p; });
-    if(t[hi]-t[lo] <= QLEN) break; // already within one quarter — optimal
+    if(t[hi]-t[lo] <= LEN) break; // already within one period — optimal
     let done=false;
-    for(let q=0;q<4 && !done;q++){
-      if(hi===keeperByQ[q] || lo===keeperByQ[q]) continue;      // don't touch a quarter's keeper
+    for(let q=0;q<P && !done;q++){
+      if(hi===keeperByQ[q] || lo===keeperByQ[q]) continue;      // don't touch a period's keeper
       const slots=FORMATIONS[g.quarters[q].formation].slots;
-      if(slots.some(s=>g.quarters[q].lineup[s.id]===lo)) continue; // lo must be on the bench this quarter
+      if(slots.some(s=>g.quarters[q].lineup[s.id]===lo)) continue; // lo must be on the bench this period
       let hiSlot=null; slots.forEach(s=>{ if(s.id!=="gk" && g.quarters[q].lineup[s.id]===hi) hiSlot=s.id; });
       if(hiSlot){ g.quarters[q].lineup[hiSlot]=lo; done=true; }   // swap: hi rests, lo plays
     }
@@ -728,9 +1034,15 @@ function render(){
   else if(ui.view==="games") app.innerHTML=renderGames();
   else if(ui.view==="season") app.innerHTML=renderSeason();
   else if(ui.view==="roster") app.innerHTML=renderRoster();
+  else if(ui.view==="share") app.innerHTML=renderShare();
   else if(ui.view==="backup") app.innerHTML=renderBackup();
-  document.getElementById("hdr-title").textContent=state.settings.teamName||"My Team";
-  document.getElementById("hdr-sub").textContent="8v8 · 4 × 12 min";
+  const nm=state.settings.teamName||activeTeam().name||"My Team";
+  const multi=store.teams.length>1;
+  document.getElementById("hdr-title").innerHTML=esc(nm)+(multi?' <span id="hdr-caret" style="font-size:13px;opacity:.6">▾</span>':"");
+  // Header subline reflects the team's default formation size and game format.
+  const dfm=state.settings.defaultFormation; const sz=FORMATIONS[dfm]?FORMATIONS[dfm].size:8;
+  const f=normalizeFormat(state.settings.format);
+  document.getElementById("hdr-sub").textContent=sz+"v"+sz+" · "+f.periods+" × "+fmt(f.periodLength)+" min";
 }
 function go(v){ ui.view=v; ui.gameId=null; render(); window.scrollTo(0,0); }
 function openGame(id){ ui.gameId=id; ui.view="game"; ui.qi=0; ui.activeSubAlert=null; ui._lastAlertKey=undefined; render(); window.scrollTo(0,0); }
@@ -743,7 +1055,7 @@ function renderSetup(){
     <label class="fld" style="margin-top:0">Team name</label>
     <input id="setupTeam" placeholder="e.g. Strikers FC" value="${esc(state.settings.teamName||"")}">
     <label class="fld">Default formation</label><select id="setupFormation">`;
-  formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
+  h+=formationOptionsHTML(state.settings.defaultFormation);
   h+=`</select>
     <label class="fld">Players — one name per line</label>
     <textarea id="setupNames" placeholder="Ava&#10;Mia&#10;Sofia&#10;…" style="width:100%;min-height:150px;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:inherit;resize:vertical"></textarea>
@@ -781,9 +1093,13 @@ function renderGames(){
 }
 function newGame(){
   const today=new Date().toISOString().slice(0,10);
+  const fmt0=normalizeFormat(state.settings.format);
+  const periods=[];
+  for(let i=0;i<fmt0.periods;i++) periods.push(blankQuarter(state.settings.defaultFormation, fmt0.periodLength));
   const g={id:uid("g"),date:today,opp:"",us:"",them:"",present:[],out:[],keepGK:true,keepers:{h1:null,h2:null},goals:[],
-    phase:"setup",
-    quarters:[0,1,2,3].map(()=>blankQuarter(state.settings.defaultFormation))};
+    phase:"setup", formationChoice:state.settings.defaultFormation,
+    format:{periodType:fmt0.periodType,periods:fmt0.periods,periodLength:fmt0.periodLength},
+    quarters:periods};
   state.games.push(g); save(); openGame(g.id);
 }
 function deleteGame(id){ if(!confirm("Delete this game and its data?"))return; state.games=state.games.filter(g=>g.id!==id); save(); go("games"); }
@@ -830,7 +1146,7 @@ function renderGameSetup(g){
   } else h+=`<div class="muted" style="font-size:14px">No one checked in yet. Tap players below as they arrive.</div>`;
   if((g.out||[]).length){
     h+=`<div class="ltlabel" style="margin-top:10px">Injured / out for today (${g.out.length})</div>`;
-    h+=`<div class="muted" style="font-size:11.5px;margin:2px 0 4px">Minutes they already played still count — they're just out of the pool for future quarters.</div>`;
+    h+=`<div class="muted" style="font-size:11.5px;margin:2px 0 4px">Minutes they already played still count — they're just out of the pool for the rest of the game.</div>`;
     g.out.forEach(pid=>{
       const mins=(mmAtt[pid]||{}).total||0;
       h+=`<div class="pl absent"><div class="ord off">🚑</div><div class="nm">${esc(name(pid))} <span class="muted" style="font-size:12px">· ${fmt(mins)} min played</span></div>
@@ -847,18 +1163,46 @@ function renderGameSetup(g){
   h+=`</div>`;
   h+=`<div class="muted" style="font-size:11.5px;margin:2px 4px 10px">Running late? This tab stays open the whole game — come back anytime to check in a latecomer or hand the keeper spot to someone else.</div>`;
 
+  // game format (per-game override) — structure + period length. Editable before AND during setup
+  // so a shortened game (weather, doubleheader) can be adjusted at the field.
+  const gf=normalizeFormat(g.format);
+  const planned=g.quarters.some(q=>Object.keys(q.lineup).length||(q.subs||[]).length);
+  h+=`<h2 class="sec">Game format</h2><div class="card">
+    <div class="muted" style="font-size:12.5px;margin-bottom:7px">Defaults to this team's setting. Change it for a one-off — e.g. a weather-shortened game or a doubleheader.${planned?' <b>Changing the number of periods or their length will reset any lineups you have set for this game.</b>':''}</div>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <select onchange="setGamePeriodType(this.value)" style="width:auto">
+        <option value="quarters" ${gf.periodType==="quarters"?"selected":""}>Quarters (4)</option>
+        <option value="halves" ${gf.periodType==="halves"?"selected":""}>Halves (2)</option>
+      </select>
+      <input type="number" inputmode="decimal" min="1" max="60" step="1" style="width:64px" value="${fmt(gf.periodLength)}" onchange="setGamePeriodLength(this.value)">
+      <span class="muted" style="font-size:12.5px">min per ${periodWord(g)}</span>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">This game: <b>${gf.periods} × ${fmt(gf.periodLength)} = ${fmt(gameTotalMin(g))} min</b> total.</div>
+  </div>`;
+
   // keepers (set first)
+  const halfMin=gf.periods===4 ? gf.periodLength*2 : gf.periodLength; // minutes covered by each keeper-half
   h+=`<h2 class="sec">Keepers · set first</h2><div class="card">`;
-  h+=`<div class="muted" style="font-size:12.5px;margin-bottom:7px">Pick who's in goal each half (24 min each). Auto-plan counts these minutes so keepers get less outfield time — nobody plays the whole game while others only get a half. Leave on <b>auto</b> to let Auto-plan choose from your keeper pool. If your keeper comes off mid-game, change it here or on the Live tab.</div>`;
+  h+=`<div class="muted" style="font-size:12.5px;margin-bottom:7px">Pick who's in goal each half (${fmt(halfMin)} min each). Auto-plan counts these minutes so keepers get less outfield time — nobody plays the whole game while others only get a half. Leave on <b>auto</b> to let Auto-plan choose from your keeper pool. If your keeper comes off mid-game, change it here or on the Live tab.</div>`;
+  const h1span = gf.periods===4 ? "Q1–Q2" : "H1";
+  const h2span = gf.periods===4 ? "Q3–Q4" : "H2";
   h+=`<div class="row" style="gap:10px">
-    <div style="flex:1"><label class="fld" style="margin-top:0">1st half · Q1–Q2</label><select onchange="setKeeper('h1',this.value)">${keeperOptions(g,'h1')}</select></div>
-    <div style="flex:1"><label class="fld" style="margin-top:0">2nd half · Q3–Q4</label><select onchange="setKeeper('h2',this.value)">${keeperOptions(g,'h2')}</select></div>
+    <div style="flex:1"><label class="fld" style="margin-top:0">1st half · ${h1span}</label><select onchange="setKeeper('h1',this.value)">${keeperOptions(g,'h1')}</select></div>
+    <div style="flex:1"><label class="fld" style="margin-top:0">2nd half · ${h2span}</label><select onchange="setKeeper('h2',this.value)">${keeperOptions(g,'h2')}</select></div>
   </div></div>`;
 
+  // formation for the whole game — pick once here, applied to all periods
+  const gameFm=gameFormation(g);
+  h+=`<h2 class="sec">Formation</h2><div class="card">
+    <div class="muted" style="font-size:12.5px;margin-bottom:7px">Pick the shape you're running today — it's applied to all ${gf.periods} ${periodWord(g)}s. You can still tweak an individual ${periodWord(g)} later on the Live tab. If fewer players check in than the formation needs, an untouched ${periodWord(g)} auto-fits to who's actually present.</div>
+    <select onchange="setGameFormation(this.value)" style="width:100%">${formationOptionsHTML(gameFm)}</select>
+    <div class="muted" style="font-size:11.5px;margin-top:6px">Running <b>${esc(FORMATIONS[gameFm]?FORMATIONS[gameFm].label:gameFm)}</b> · ${FORMATIONS[gameFm]?FORMATIONS[gameFm].size:"?"} on the field incl. keeper.</div>
+  </div>`;
+
   // auto-plan
-  h+=`<div class="card"><b style="font-size:14px">Auto-plan all 4 quarters</b>
+  h+=`<div class="card"><b style="font-size:14px">Auto-plan all ${gf.periods} ${periodWord(g)}s</b>
     <div class="muted" style="font-size:12.5px;margin:3px 0 8px">Builds a full-game lineup plan in one tap — balances minutes, rotates positions, and protects keepers. Best run once everyone's checked in.</div>
-    <button class="btn ghost wide" onclick="autoRotateGame()">⚡ Auto-plan all 4Q</button></div>`;
+    <button class="btn ghost wide" onclick="autoRotateGame()">⚡ Auto-plan all ${gf.periods}${periodType(g)==="halves"?"H":"Q"}</button></div>`;
 
   h+=`<button class="btn wide" style="margin-top:6px" onclick="setPhase('live')">Start game →</button>`;
   return h;
@@ -866,6 +1210,9 @@ function renderGameSetup(g){
 
 //// ---------- Live game ----------
 function renderGameLive(g){
+  // Clamp the selected period — switching a game from quarters to halves can leave ui.qi past the end.
+  if(ui.qi>=gPeriods(g)) ui.qi=gPeriods(g)-1;
+  if(ui.qi<0) ui.qi=0;
   const activeP=activePresent(g);
   const mmAll=gameMinutes(g); // running whole-game minutes, schedule-based off the current lineup+subs plan
   const goals=g.goals||[];
@@ -888,12 +1235,12 @@ function renderGameLive(g){
   // quarters
   h+=`<div class="row between" style="margin:16px 2px 6px"><h2 class="sec" style="margin:0">Lineups</h2></div>`;
   h+=`<div class="qtabs">`;
-  for(let i=0;i<4;i++){ h+=`<button class="${i===ui.qi?'active':''}" onclick="setQ(${i})">Q${i+1}</button>`; }
+  for(let i=0;i<gPeriods(g);i++){ h+=`<button class="${i===ui.qi?'active':''}" onclick="setQ(${i})">${periodLabel(g,i)}</button>`; }
   h+=`</div>`;
 
   const q=g.quarters[ui.qi];
   if(!q.clock) q.clock={running:false,startedAt:null,elapsedMs:0};
-  const clkSec=clockElapsedSec(q), clkDone=clkSec>=QLEN*60, clkWarn=!clkDone && clkSec>=(QLEN*60-60);
+  const clkSec=clockElapsedSec(q), clkDone=clkSec>=qlen(q)*60, clkWarn=!clkDone && clkSec>=(qlen(q)*60-60);
   h+=`<div class="card clockcard${clkDone?' done':(clkWarn?' warn':'')}">
     <div class="row between">
       <div class="clocktime" id="clockDisplay">${clockRemainingLabel(q)}</div>
@@ -904,7 +1251,7 @@ function renderGameLive(g){
         <button class="btn ghost sm" onclick="resetClock(${ui.qi})">↺ Reset</button>
       </div>
     </div>
-    <div class="muted" style="font-size:11.5px;margin-top:4px">Q${ui.qi+1} clock · ${fmt(QLEN)} min. Sub times below default to whatever this shows when you log them.</div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">${periodLabel(g,ui.qi)} clock · ${fmt(qlen(q))} min. Sub times below default to whatever this shows when you log them.</div>
   </div>`;
   // Note: no dedicated keeper picker here — the GK slot is just another lineup position, so
   // swapping the keeper mid-game works the same way as any other sub (drag, tap, or "+ Sub").
@@ -927,7 +1274,7 @@ function renderGameLive(g){
   // suggest-next-quarter prompt (shown when this quarter isn't set yet)
   if(activeP.length && Object.values(q.lineup).filter(Boolean).length===0){
     const sug=suggestionFor(ui.qi).slice(0,8).map(p=>esc(firstName(name(p)))).join(", ");
-    h+=`<div class="suggest"><b>Q${ui.qi+1} isn't set yet.</b> ${ui.qi===0?"Suggested starters by arrival order:":"Lowest minutes so far — suggested to start:"} ${sug}.
+    h+=`<div class="suggest"><b>${periodLabel(g,ui.qi)} isn't set yet.</b> ${ui.qi===0?"Suggested starters by arrival order:":"Lowest minutes so far — suggested to start:"} ${sug}.
       <div style="margin-top:8px"><button class="btn sm" onclick="applySuggestion(${ui.qi})">${ui.qi===0?"Apply by arrival":"Apply balanced lineup"}</button></div></div>`;
   }
   // field
@@ -940,7 +1287,7 @@ function renderGameLive(g){
   h+=`<div class="field"><div class="ln"></div><div class="cir"></div><div class="pbox t"></div><div class="pbox b"></div>`;
   FORMATIONS[q.formation].slots.forEach(s=>{
     const startPid=q.lineup[s.id]||null;
-    const curPid=slotOccupantAt(q,s.id,QLEN);
+    const curPid=slotOccupantAt(q,s.id,qlen(q));
     const cls=s.grp.toLowerCase();
     const open=(curPid===null && startPid!==null); // started here, then moved away
     let disc,who="",tag="",badge="";
@@ -972,7 +1319,7 @@ function renderGameLive(g){
       ${disc}${tiredBtn}${badge}<div class="pos">${s.pos}</div>${who}${tag}</div>`;
   });
   h+=`</div>`;
-  h+=`<div class="muted" style="font-size:11.5px;margin-top:3px">Drag a bench chip or a player onto a spot to set the lineup · tap a spot to pick · <span style="color:var(--f);font-weight:700">OPEN</span> = vacated by a move, fill it with a sub. Badge on each player = <b>this quarter' / whole-game'</b> scheduled minutes · tap 😓 on a jersey to flag them tired.</div>`;
+  h+=`<div class="muted" style="font-size:11.5px;margin-top:3px">Drag a bench chip or a player onto a spot to set the lineup · tap a spot to pick · <span style="color:var(--f);font-weight:700">OPEN</span> = vacated by a move, fill it with a sub. Badge on each player = <b>this ${periodWord(g)}' / whole-game'</b> scheduled minutes · tap 😓 on a jersey to flag them tired.</div>`;
   // bench
   const onField=Object.values(q.lineup).filter(Boolean);
   const bench=activeP.filter(p=>!onField.includes(p));
@@ -981,13 +1328,13 @@ function renderGameLive(g){
   h+=`<div class="fillgrid">
     <button class="btn ghost sm" onclick="suggestBalance(${ui.qi})">⚖︎ Balance time</button>
     <button class="btn ghost sm" onclick="autoFill(${ui.qi})">↻ By arrival order</button>
-    ${ui.qi>0?`<button class="btn ghost sm" onclick="carryOver(${ui.qi})">⏮ Carry over Q${ui.qi}</button>`:""}
+    ${ui.qi>0?`<button class="btn ghost sm" onclick="carryOver(${ui.qi})">⏮ Carry over ${periodLabel(g,ui.qi-1)}</button>`:""}
     <button class="btn ghost sm" onclick="rotateAreas(${ui.qi})">🔄 Rotate areas</button>
     <button class="btn ghost sm" onclick="clearQ(${ui.qi})">✕ Clear</button></div>
     <div class="muted" style="font-size:11.5px;margin-top:6px">Rotate areas shifts everyone currently in the lineup between defense, midfield and forward — handy when you've got exactly enough players and no one to sub in. Works great paired with Carry over.</div>`;
   if(ui.qi>0){
-    h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:13px;font-weight:600"><input type="checkbox" ${g.keepGK!==false?'checked':''} onchange="setKeepGK(this.checked)" style="width:auto"> Keep last quarter's keeper in goal</label>`;
-    h+=`<div class="muted" style="font-size:11.5px;margin-top:7px">Plan this quarter anytime · <b>Carry over Q${ui.qi}</b> starts it from Q${ui.qi}'s final players (after subs).</div>`;
+    h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:13px;font-weight:600"><input type="checkbox" ${g.keepGK!==false?'checked':''} onchange="setKeepGK(this.checked)" style="width:auto"> Keep last ${periodWord(g)}'s keeper in goal</label>`;
+    h+=`<div class="muted" style="font-size:11.5px;margin-top:7px">Plan this ${periodWord(g)} anytime · <b>Carry over ${periodLabel(g,ui.qi-1)}</b> starts it from ${periodLabel(g,ui.qi-1)}'s final players (after subs).</div>`;
   }
   h+=`<div class="ltlabel" style="margin-top:12px">Bench (${bench.length})</div>`;
   h+=`<div class="bench" data-dropbench="1" style="margin-top:5px">`;
@@ -999,13 +1346,16 @@ function renderGameLive(g){
   const emptySlots=FORMATIONS[q.formation].slots.filter(s=>!q.lineup[s.id]).length;
   if(activeP.length && emptySlots>0) h+=`<div class="bench"><span class="chip warn">${emptySlots} open position${emptySlots>1?"s":""}</span></div>`;
 
-  // Q2 / Q4 mid-half rotation prompt (parity + rest)
-  if((ui.qi===1||ui.qi===3) && bench.length && Object.values(q.lineup).filter(Boolean).length){
-    h+=`<div class="suggest"><b>${ui.qi===1?"First":"Second"}-half rotation point.</b> Halfway through Q${ui.qi+1} is a good time to even out minutes and rest tired legs.
+  // Mid-period rotation prompt (parity + rest). For quarters this is Q2/Q4 (the back half of each
+  // half); for halves, either period's midpoint is a fine rotation nudge.
+  const showRot = periodType(g)==="halves" ? true : (ui.qi===1||ui.qi===3);
+  if(showRot && bench.length && Object.values(q.lineup).filter(Boolean).length){
+    const half=halfOfPeriod(g,ui.qi);
+    h+=`<div class="suggest"><b>${half===0?"First":"Second"}-half rotation point.</b> Partway through ${periodLabel(g,ui.qi)} is a good time to even out minutes and rest tired legs.
       <div style="margin-top:8px"><button class="btn sm" onclick="openSuggestSubs(${ui.qi})">✨ Suggest subs</button></div></div>`;
   }
   // subs
-  h+=`<div class="row between" style="margin-top:14px"><b style="font-size:13px">Mid-quarter subs</b>
+  h+=`<div class="row between" style="margin-top:14px"><b style="font-size:13px">Mid-${periodWord(g)} subs</b>
     <div class="toolbtns"><button class="btn ghost sm" onclick="openSuggestSubs(${ui.qi})">✨ Suggest</button>
     <button class="btn ghost sm" onclick="openMassSub(${ui.qi})">⇄ Sub bench</button>
     <button class="btn sm" onclick="openSub(${ui.qi})">＋ Sub</button></div></div>`;
@@ -1015,16 +1365,16 @@ function renderGameLive(g){
       h+=`<div class="sub-item"><span class="t">${fmt(sb.minute)}'</span>
         <span style="flex:1">${slot?slot.pos:"?"}: <b>${esc(firstName(name(sb.on)))}</b> comes on</span>
         <button class="btn red sm" onclick="delSub(${ui.qi},'${sb.id}')">✕</button></div>`; });
-  } else h+=`<div class="muted" style="font-size:13px;margin-top:4px">No subs — everyone on the field plays the full ${fmt(QLEN)} min this quarter.</div>`;
+  } else h+=`<div class="muted" style="font-size:13px;margin-top:4px">No subs — everyone on the field plays the full ${fmt(qlen(q))} min this ${periodWord(g)}.</div>`;
   h+=`</div>`;
 
-  // quarter minutes quick
-  h+=`<div class="card"><div class="row between" style="margin-bottom:2px"><b style="font-size:13px">This quarter's minutes</b><span class="muted" style="font-size:11px">${fmt(QLEN)}' quarter</span></div>
+  // period minutes quick
+  h+=`<div class="card"><div class="row between" style="margin-bottom:2px"><b style="font-size:13px">This ${periodWord(g)}'s minutes</b><span class="muted" style="font-size:11px">${fmt(qlen(q))}' ${periodWord(g)}</span></div>
     <div class="muted" style="font-size:11.5px;margin:3px 0 8px">Tap a player who looks tired — Suggest subs will bring them off first.</div>`;
   activeP.forEach(pid=>{
     const v=qm[pid]||0;
     const tot=(mmAll[pid]||{}).total||0;
-    const onSlot=FORMATIONS[q.formation].slots.find(s=>slotOccupantAt(q,s.id,QLEN)===pid);
+    const onSlot=FORMATIONS[q.formation].slots.find(s=>slotOccupantAt(q,s.id,qlen(q))===pid);
     const canFlag=onSlot && onSlot.grp!=="GK";
     const tired=isTired(pid);
     const color=onSlot? `var(--${onSlot.grp.toLowerCase()})` : "var(--muted)";
@@ -1036,7 +1386,7 @@ function renderGameLive(g){
           <span class="mt-name">${esc(firstName(name(pid)))}${tired?'<span class="mt-gktag" style="color:#c62828">😓 tired</span>':''}</span>
           <span class="mt-right"><span class="mt-mins" style="color:${color}">${fmt(v)}'</span><span class="muted" style="font-size:11.5px">${fmt(tot)}' tot</span></span>
         </div>
-        <div class="mt-bar"><div class="mt-track">${mtSegments(qmGrp[pid], QLEN)}</div></div>
+        <div class="mt-bar"><div class="mt-track">${mtSegments(qmGrp[pid], qlen(q))}</div></div>
       </div>
     </div>`;
   });
@@ -1074,10 +1424,12 @@ function renderGameMinutes(g){
   const target=targetFor(g); const fair=fairShare(g); const custom=(g.targetMin!=null&&g.targetMin!=="");
   let h=`<div class="card">`;
   h+=`<div class="row between" style="margin-bottom:5px"><b style="font-size:14px">Playing-time target</b>
-    <div class="row" style="gap:6px"><input type="number" inputmode="decimal" min="0" max="${QLEN*4}" step="1" style="width:64px" value="${custom?g.targetMin:""}" placeholder="${fmt(fair)}" onchange="setTarget(this.value)"><span class="muted" style="font-size:12px">min</span></div></div>`;
+    <div class="row" style="gap:6px"><input type="number" inputmode="decimal" min="0" max="${gameTotalMin(g)}" step="1" style="width:64px" value="${custom?g.targetMin:""}" placeholder="${fmt(fair)}" onchange="setTarget(this.value)"><span class="muted" style="font-size:12px">min</span></div></div>`;
   h+=`<div class="muted" style="font-size:12.5px;margin-bottom:2px">Target <b>${fmt(target)} min</b>/player ${custom?"(custom — clear to use fair share)":"(fair share of "+present.length+" present)"}. Within ±6 min = On. Keepers are shown separately and aren't held to this target.</div>`;
 
-  const list=present.map(pid=>({pid, m:mm[pid]||{total:0,q:[0,0,0,0],grp:{GK:0,D:0,M:0,F:0}}}));
+  const P=gPeriods(g);
+  const blank=()=>({total:0,q:new Array(P).fill(0),grp:{GK:0,D:0,M:0,F:0}});
+  const list=present.map(pid=>({pid, m:mm[pid]||blank()}));
   const outfield=list.filter(r=>!isGK(r.pid)).sort((a,b)=>a.m.total-b.m.total);
   const keepers=list.filter(r=>isGK(r.pid)).sort((a,b)=>a.m.total-b.m.total);
   const ordered=outfield.concat(keepers); // outfield sorted shortest-first, tagged keepers pinned to the bottom
@@ -1108,7 +1460,7 @@ function renderGameMinutes(g){
           <span class="mt-right"><span class="mt-mins" style="color:${color}">${fmt(r.m.total)}'</span>${pillHtml}</span>
         </div>
         <div class="mt-bar"><div class="mt-track">${mtSegments(r.m.grp, scaleMax)}</div>${keeper?'':`<div class="mt-tick" style="left:${tickPct}%"></div>`}</div>
-        <div class="mt-sub">Q1 ${fmt(r.m.q[0])}' · Q2 ${fmt(r.m.q[1])}' · Q3 ${fmt(r.m.q[2])}' · Q4 ${fmt(r.m.q[3])}'</div>
+        <div class="mt-sub">${r.m.q.map((mn,i)=>periodLabel(g,i)+" "+fmt(mn)+"'").join(" · ")}</div>
       </div>
     </div>`;
   });
@@ -1156,10 +1508,12 @@ function gameSummaryText(g){
   sub.push("Target "+fmt(target)+" min/player");
   L.push(sub.join("  ·  "));
   L.push("");
-  L.push(DIV); L.push("⏱ PLAYING TIME  (max "+fmt(QLEN*4)+" min)"); L.push(DIV);
-  const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:[0,0,0,0],grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
+  L.push(DIV); L.push("⏱ PLAYING TIME  (max "+fmt(gameTotalMin(g))+" min)"); L.push(DIV);
+  const P=gPeriods(g);
+  const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:new Array(P).fill(0),grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
+  const pWord=(periodType(g)==="halves"?"H":"Q");
   list.forEach(r=>{ const qs=r.m.q.map(x=>fmt(x)||"0").join("/"); const st=ptStatus(r.m.total,target);
-    L.push(name(r.pid)+" — "+fmt(r.m.total)+" min  ·  "+st.lbl+"  ·  Q "+qs); });
+    L.push(name(r.pid)+" — "+fmt(r.m.total)+" min  ·  "+st.lbl+"  ·  "+pWord+" "+qs); });
   const short=list.filter(r=>ptStatus(r.m.total,target).k==="short").map(r=>name(r.pid));
   if(short.length){ L.push(""); L.push("Below target: "+short.join(", ")); }
   if((g.goals||[]).length){
@@ -1230,7 +1584,7 @@ function gameSummaryHTML(g){
   const mm=gameMinutes(g); const present=g.present||[]; const target=targetFor(g);
   const COLOR={on:"#1b7a3d",short:"#c0392b",over:"#a05a00"};
   const BG={on:"#e7f6ec",short:"#fdecea",over:"#fff3e0"};
-  const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:[0,0,0,0],grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
+  const list=present.map(pid=>({pid,m:mm[pid]||{total:0,q:new Array(gPeriods(g)).fill(0),grp:{GK:0,D:0,M:0,F:0}}})).sort((a,b)=>b.m.total-a.m.total);
   let h=`<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1a2238;max-width:600px">`;
   h+=`<h2 style="margin:0 0 4px;font-size:20px;color:#13235a">⚽ ${esc(state.settings.teamName||"Team")}${g.opp?" vs "+esc(g.opp):""}</h2>`;
   const sub=[];
@@ -1247,7 +1601,7 @@ function gameSummaryHTML(g){
 
   if(g.notes) h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">📝 Notes</h3><div style="font-size:13.5px;white-space:pre-wrap;margin-bottom:8px">${esc(g.notes)}</div>`;
 
-  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(QLEN*4)} min)</span></h3>`;
+  h+=`<h3 style="margin:18px 0 8px;font-size:15px;color:#13235a;border-bottom:2px solid #e3e7f0;padding-bottom:5px">⏱ Playing Time <span style="font-weight:400;color:#697089;font-size:12.5px">(max ${fmt(gameTotalMin(g))} min)</span></h3>`;
   // Legend + player rows below use tables/margins instead of flexbox — pasting into Gmail/Apple
   // Mail/Notes strips align-items, justify-content and gap (that's what squashed the swatches
   // together and left jersey numbers pinned top-left last time), so spacing here comes from plain
@@ -1264,7 +1618,7 @@ function gameSummaryHTML(g){
     const pill=keeper
       ? `<span style="font-size:12px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;background:#e9edf8;color:#2f6fb0">Keeper</span>`
       : (d=>`<span style="font-size:12px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap;background:${BG[d.k]};color:${COLOR[d.k]}">${esc(d.txt)}</span>`)(ptDiff(r.m.total,target));
-    const qs=`Q1 ${fmt(r.m.q[0])}' · Q2 ${fmt(r.m.q[1])}' · Q3 ${fmt(r.m.q[2])}' · Q4 ${fmt(r.m.q[3])}'`;
+    const qs=r.m.q.map((mn,idx)=>periodLabel(g,idx)+" "+fmt(mn)+"'").join(" · ");
     const borderStyle=i<list.length-1?"border-bottom:1px solid #e3e7f0;":"";
     h+=`<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse"><tr>
       <td valign="top" align="center" style="width:50px;padding:12px 12px 12px 2px;${borderStyle}">
@@ -1362,7 +1716,8 @@ function toggleAttend(pid){ const g=curGame(); g.present=g.present||[]; g.out=g.
   }
   // For any quarter nobody's touched yet (empty lineup, no subs), keep its formation matched to
   // how many are actually active present today — nothing to lose since there's no lineup to clear.
-  const fit=bestFormationFor(activePresent(g).length);
+  // Prefer the coach's kickoff formation choice whenever the present count fits its size.
+  const fit=bestFormationFor(activePresent(g).length, g.formationChoice);
   g.quarters.forEach(q=>{ if(!Object.keys(q.lineup).length && !(q.subs||[]).length) q.formation=fit; });
   save(); render();
 }
@@ -1377,22 +1732,88 @@ function setPlayerOut(pid,out){
   if(out && i<0) g.out.push(pid);
   if(!out && i>=0) g.out.splice(i,1);
   if(out) clearTired(pid);
-  const fit=bestFormationFor(activePresent(g).length);
+  const fit=bestFormationFor(activePresent(g).length, g.formationChoice);
   g.quarters.forEach(q=>{ if(!Object.keys(q.lineup).length && !(q.subs||[]).length) q.formation=fit; });
   save(); render();
 }
 function setFormation(qi,f){ const g=curGame(); const q=g.quarters[qi];
   if(q.formation!==f && (Object.keys(q.lineup).length||q.subs.length)){
-    if(!confirm("Changing formation clears this quarter's lineup. Continue?")){ render(); return; }
+    if(!confirm("Changing formation clears this "+periodWord(g)+"'s lineup. Continue?")){ render(); return; }
   }
   q.formation=f; q.lineup={}; q.subs=[]; save(); render();
+}
+// The formation chosen for the whole game (pre-game kickoff picker). Falls back to whatever's
+// stored on the game, then Q1's formation, then the team default. This is the shape the game is
+// "running" and it's what untouched quarters re-fit toward as players check in.
+function gameFormation(g){
+  if(g.formationChoice && FORMATIONS[g.formationChoice]) return g.formationChoice;
+  if(g.quarters&&g.quarters[0]&&FORMATIONS[g.quarters[0].formation]) return g.quarters[0].formation;
+  return state.settings.defaultFormation;
+}
+// Kickoff picker: apply one formation to all periods. Periods that already have a lineup
+// or subs set get cleared (with one confirm), same rule as the per-period picker.
+function setGameFormation(f){
+  const g=curGame(); if(!g||!FORMATIONS[f]) return;
+  const touched=g.quarters.some(q=>Object.keys(q.lineup).length||(q.subs||[]).length);
+  if(touched && !confirm("Apply "+FORMATIONS[f].label+" to all "+gPeriods(g)+" "+periodWord(g)+"s? This clears any lineups you've already set.")){ render(); return; }
+  g.formationChoice=f;
+  g.quarters.forEach(q=>{ q.formation=f; q.lineup={}; q.subs=[]; });
+  save(); render();
+}
+// ---- Per-game format overrides (Pre-game) ----
+// Rebuild g.quarters to a new period count, preserving as many existing periods as possible.
+// Only used when switching quarters<->halves, which changes the count (4<->2).
+function rebuildPeriods(g, newCount, len){
+  const fm=gameFormation(g);
+  const old=g.quarters||[];
+  const next=[];
+  for(let i=0;i<newCount;i++){
+    if(old[i]){ old[i].len=len; next.push(old[i]); }        // keep existing period, restamp length
+    else next.push(blankQuarter(fm,len));                    // add fresh periods if growing
+  }
+  g.quarters=next;
+}
+function setGamePeriodType(v){
+  const g=curGame(); if(!g) return;
+  const type=(v==="halves"?"halves":"quarters");
+  const cur=normalizeFormat(g.format);
+  if(type===cur.periodType) return;
+  const newCount=(type==="halves"?2:4);
+  const touched=g.quarters.some(q=>Object.keys(q.lineup).length||(q.subs||[]).length);
+  // Shrinking (quarters->halves) drops periods 3&4; either direction changes the structure, so
+  // confirm whenever there's something to lose.
+  if(touched && !confirm("Switch to "+(type==="halves"?"2 halves":"4 quarters")+"? This resets the lineups and clocks for this game.")){ render(); return; }
+  const len=cur.periodLength;
+  g.format=normalizeFormat({periodType:type,periods:newCount,periodLength:len});
+  if(touched){
+    // full reset to clean periods of the right count
+    const fm=gameFormation(g); g.quarters=[];
+    for(let i=0;i<newCount;i++) g.quarters.push(blankQuarter(fm,len));
+  } else {
+    rebuildPeriods(g,newCount,len);
+  }
+  save(); render();
+}
+function setGamePeriodLength(v){
+  const g=curGame(); if(!g) return;
+  let n=parseFloat(v); if(!(n>0)) n=QLEN; n=Math.min(60,n);
+  const cur=normalizeFormat(g.format);
+  g.format=normalizeFormat({periodType:cur.periodType,periods:cur.periods,periodLength:n});
+  // Re-stamp every period's length. Changing length doesn't clear lineups (subs already logged stay
+  // valid — they're clamped to the new length by the minutes engine), but a clock that already ran
+  // past the new length is reset so it can't show negative time remaining.
+  g.quarters.forEach(q=>{
+    q.len=n;
+    if(q.clock && clockElapsedSec(q) > n*60){ q.clock={running:false,startedAt:null,elapsedMs:0}; }
+  });
+  save(); render();
 }
 // ---- Keeper pool ----
 function isGK(pid){ const p=state.roster.find(x=>x.id===pid); return !!(p&&p.gk); }
 function gkPoolPresent(){ const g=curGame(); return activePresent(g).filter(isGK); }
 // Returns the keeper to lock for this quarter (prev quarter's GK if keeping, else a rotating pool keeper), or null
 function keepGKFor(qi){ const g=curGame(); if(g.keepGK===false || qi<1) return null;
-  const gk=slotOccupantAt(g.quarters[qi-1],"gk",QLEN);
+  const gk=slotOccupantAt(g.quarters[qi-1],"gk",qlen(g.quarters[qi-1]));
   return (gk && activePresent(g).includes(gk)) ? gk : null;
 }
 function gkForFill(qi){ const ex=keeperForQuarter(qi); if(ex) return ex;
@@ -1424,12 +1845,14 @@ function suggestBalance(qi){ const g=curGame(); const q=g.quarters[qi];
   order.slice(0,fillSlots.length).forEach((pid,i)=>{ q.lineup[fillSlots[i].id]=pid; });
   save(); render();
 }
-// Start this quarter from the PREVIOUS quarter's final on-field players (after its subs)
+// Start this period from the PREVIOUS period's final on-field players (after its subs)
 function carryOver(qi){ const g=curGame(); if(qi<1) return; const prev=g.quarters[qi-1];
   const slots=FORMATIONS[prev.formation].slots; const lineup={};
-  slots.forEach(s=>{ const occ=slotOccupantAt(prev,s.id,QLEN); if(occ) lineup[s.id]=occ; });
-  // starting a new quarter — its clock always begins fresh, regardless of the previous quarter's
-  g.quarters[qi]={formation:prev.formation, lineup:lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
+  slots.forEach(s=>{ const occ=slotOccupantAt(prev,s.id,qlen(prev)); if(occ) lineup[s.id]=occ; });
+  // starting a new period — its clock always begins fresh, regardless of the previous period's.
+  // Keep this period's own length (q.len) rather than inheriting the previous period's.
+  const len=qlen(g.quarters[qi]);
+  g.quarters[qi]={formation:prev.formation, len:len, lineup:lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
   save(); render();
 }
 function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi].subs=[]; save(); render(); }
@@ -1515,16 +1938,16 @@ function openPicker(qi,slot){
   showSheet(h);
 }
 function openSub(qi){
-  const g=curGame(); const q=g.quarters[qi];
+  const g=curGame(); const q=g.quarters[qi]; const LEN=qlen(q);
   const slots=FORMATIONS[q.formation].slots;
-  let h=`<h3>Mid-quarter sub · Q${qi+1}</h3>`;
-  h+=`<div class="note">Log when (minute 0–${fmt(QLEN)}) a player comes on for the player currently in that position. Minutes split automatically.</div>`;
+  let h=`<h3>Mid-${periodWord(g)} sub · ${periodLabel(g,qi)}</h3>`;
+  h+=`<div class="note">Log when (minute 0–${fmt(LEN)}) a player comes on for the player currently in that position. Minutes split automatically.</div>`;
   h+=`<label class="fld">Position</label><select id="subSlot">`;
   slots.forEach(s=>{ const cur=q.lineup[s.id]; h+=`<option value="${s.id}">${s.pos} — ${cur?esc(name(cur)):"(empty)"}</option>`; });
   h+=`</select>`;
-  h+=`<label class="fld">Minute of the sub</label><input id="subMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}">`;
+  h+=`<label class="fld">Minute of the sub</label><input id="subMin" type="number" inputmode="decimal" min="0" max="${LEN}" step="0.5" value="${clockMinuteNow(qi)??Math.min(6,LEN/2)}">`;
   const benchP=[], fieldP=[]; const activeSet=new Set(activePresent(g));
-  (g.present||[]).forEach(pid=>{ const sl=occupantSlotOf(q,pid,QLEN);
+  (g.present||[]).forEach(pid=>{ const sl=occupantSlotOf(q,pid,LEN);
     if(sl) fieldP.push({pid,sl}); else if(activeSet.has(pid)) benchP.push(pid); });
   h+=`<label class="fld">Player coming on</label><select id="subOn">`;
   if(benchP.length){ h+=`<optgroup label="◦ Bench — available">`;
@@ -1542,7 +1965,7 @@ function saveSub(qi){
   const slot=document.getElementById("subSlot").value;
   let minute=parseFloat(document.getElementById("subMin").value);
   const on=document.getElementById("subOn").value;
-  if(isNaN(minute)) minute=0; minute=Math.max(0,Math.min(QLEN,minute));
+  if(isNaN(minute)) minute=0; minute=Math.max(0,Math.min(qlen(q),minute));
   q.subs=q.subs||[];
   // Whoever's currently in this slot is coming off — clear their tired flag now that they're resting.
   clearTired(slotOccupantAt(q,slot,minute));
@@ -1561,18 +1984,18 @@ function saveSub(qi){
 }
 // ---- Full-bench (mass) sub ----
 function openMassSub(qi){
-  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g);
+  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g); const LEN=qlen(q);
   const slots=FORMATIONS[q.formation].slots;
-  const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
+  const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,LEN)})).filter(x=>x.pid);
   const benchNow=present.filter(p=>!onField.some(f=>f.pid===p));
   if(!benchNow.length){ alert("No one is on the bench to sub in."); return; }
   ui.massOverride={}; // reset any per-row "who comes off" overrides from a previous open
   const hasTired=(g.tired||[]).some(pid=>onField.some(f=>f.pid===pid));
-  let h=`<h3>Sub the whole bench · Q${qi+1}</h3>`;
+  let h=`<h3>Sub the whole bench · ${periodLabel(g,qi)}</h3>`;
   h+=hasTired
     ? `<div class="note">Brings every bench player on, swapping out your flagged 😓 tired players first. Change who comes off for anyone below if you'd rather choose yourself. Minutes split automatically.</div>`
     : `<div class="note">Brings every bench player on at once, swapping out whoever's been on the field longest without a break (goalie time doesn't count). Change who comes off for anyone below if you'd rather choose yourself. Minutes split automatically.</div>`;
-  h+=`<label class="fld">Minute of the sub</label><input id="msMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}">`;
+  h+=`<label class="fld">Minute of the sub</label><input id="msMin" type="number" inputmode="decimal" min="0" max="${LEN}" step="0.5" value="${clockMinuteNow(qi)??Math.min(6,LEN/2)}">`;
   h+=`<label class="row" style="gap:8px;margin-top:10px;font-size:14px;font-weight:600"><input type="checkbox" id="msKeepGk" checked style="width:auto"> Keep the keeper on (don't swap GK)</label>`;
   h+=`<div id="msPreview"></div>`;
   h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applyMassSub(${qi})">Swap them in</button>
@@ -1585,10 +2008,10 @@ function openMassSub(qi){
 // on-field player eligible to come off (all of them, not just the algorithm's top picks) — the
 // eligible pool is what per-row override dropdowns choose from.
 function massCandidates(qi){
-  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g);
+  const g=curGame(); const q=g.quarters[qi]; const present=activePresent(g); const LEN=qlen(q);
   const slots=FORMATIONS[q.formation].slots;
   const keepGk=document.getElementById("msKeepGk")? document.getElementById("msKeepGk").checked : true;
-  const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,QLEN)})).filter(x=>x.pid);
+  const onField=slots.map(s=>({slot:s.id,pos:s.pos,grp:s.grp,pid:slotOccupantAt(q,s.id,LEN)})).filter(x=>x.pid);
   const benchNow=present.filter(p=>!onField.some(f=>f.pid===p));
   const proj={}; present.forEach(p=>proj[p]=0);
   g.quarters.forEach(qq=>{ quarterStints(qq).forEach(st=>{ if(proj[st.pid]!=null) proj[st.pid]+=st.min; }); });
@@ -1597,7 +2020,7 @@ function massCandidates(qi){
   const tired=(g.tired||[]);
   const tiredOff=eligible.filter(f=>tired.includes(f.pid)).sort((a,b)=> proj[b.pid]-proj[a.pid]);
   const restOff=eligible.filter(f=>!tired.includes(f.pid))
-    .sort((a,b)=> consecutiveOutfieldMinutes(b.pid,qi,QLEN)-consecutiveOutfieldMinutes(a.pid,qi,QLEN));
+    .sort((a,b)=> consecutiveOutfieldMinutes(b.pid,qi,LEN)-consecutiveOutfieldMinutes(a.pid,qi,LEN));
   const defaultOrder=tiredOff.concat(restOff); // who SHOULD come off first, absent any override
   return {bench, eligible, defaultOrder, proj};
 }
@@ -1636,7 +2059,7 @@ function renderMassPreview(qi){
 function applyMassSub(qi){
   const g=curGame(); const q=g.quarters[qi];
   let minute=parseFloat(document.getElementById("msMin").value);
-  if(isNaN(minute)) minute=0; minute=Math.max(0,Math.min(QLEN,minute));
+  if(isNaN(minute)) minute=0; minute=Math.max(0,Math.min(qlen(q),minute));
   const {pairs}=massPairs(qi);
   if(!pairs.length){ alert("No swaps to apply."); return; }
   q.subs=q.subs||[];
@@ -1656,7 +2079,7 @@ function clearTired(pid){ const g=curGame(); if(g && g.tired && pid) g.tired=g.t
 // and can carry across a quarter boundary if they were never benched.
 function consecutiveOutfieldMinutes(pid,qi,atMinute){
   const g=curGame(); if(!g) return 0;
-  const STEP=0.5; let total=0, q=qi, t=Math.max(0,Math.min(QLEN,atMinute));
+  const STEP=0.5; let total=0, q=qi, t=Math.max(0,Math.min(qlen(g.quarters[qi]),atMinute));
   while(q>=0){
     const quarter=g.quarters[q]; if(!quarter) break;
     let stopped=false;
@@ -1668,7 +2091,7 @@ function consecutiveOutfieldMinutes(pid,qi,atMinute){
       t-=STEP;
     }
     if(stopped) break;
-    q--; t=QLEN;
+    q--; if(q>=0) t=qlen(g.quarters[q]); // reset to the previous period's own length
   }
   return total;
 }
@@ -1706,19 +2129,20 @@ function suggestSubPairs(qi,minute){
   return pairs;
 }
 function openSuggestSubs(qi){
-  const g=curGame(); const hasTired=(g.tired||[]).length>0;
-  let h=`<h3>Suggest subs · Q${qi+1}</h3>`;
+  const g=curGame(); const hasTired=(g.tired||[]).length>0; const LEN=qlen(g.quarters[qi]);
+  let h=`<h3>Suggest subs · ${periodLabel(g,qi)}</h3>`;
   h+=hasTired
     ? `<div class="note">Bringing off your flagged 😓 tired players first, paired with your lowest-minute bench players. The keeper stays on. Minutes split automatically.</div>`
     : `<div class="note">No one's flagged tired, so this brings on your freshest bench players for whoever's been on the field longest without a break (goalie time doesn't count against them). Tap a player below the field to flag them tired instead. The keeper stays on.</div>`;
-  h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${QLEN}" step="0.5" value="${clockMinuteNow(qi)??6}" onchange="renderSuggestPreview(${qi})">`;
+  h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${LEN}" step="0.5" value="${clockMinuteNow(qi)??Math.min(6,LEN/2)}" onchange="renderSuggestPreview(${qi})">`;
   h+=`<div id="ssPreview"></div>`;
   h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applySuggestSubs(${qi})">Apply these subs</button>
     <button class="btn ghost" onclick="closeSheet()">Cancel</button></div>`;
   showSheet(h); renderSuggestPreview(qi);
 }
 function renderSuggestPreview(qi){
-  const m=Math.max(0,Math.min(QLEN, parseFloat(document.getElementById("ssMin").value)||0));
+  const g=curGame(); const LEN=qlen(g.quarters[qi]);
+  const m=Math.max(0,Math.min(LEN, parseFloat(document.getElementById("ssMin").value)||0));
   const pairs=suggestSubPairs(qi,m);
   let h=`<div class="ltlabel" style="margin-top:12px">Suggested swaps (${pairs.length})</div>`;
   if(!pairs.length) h+=`<div class="muted" style="font-size:13px">No bench players available to sub in right now.</div>`;
@@ -1727,7 +2151,7 @@ function renderSuggestPreview(qi){
 }
 function applySuggestSubs(qi){
   const g=curGame(); const q=g.quarters[qi];
-  const m=Math.max(0,Math.min(QLEN, parseFloat(document.getElementById("ssMin").value)||0));
+  const m=Math.max(0,Math.min(qlen(q), parseFloat(document.getElementById("ssMin").value)||0));
   const pairs=suggestSubPairs(qi,m);
   if(!pairs.length){ alert("No bench players available to sub in right now."); return; }
   q.subs=q.subs||[];
@@ -1758,6 +2182,30 @@ function saveGoal(){
   g.us=g.goals.length; save(); closeSheet(); render();
 }
 function delGoal(id){ const g=curGame(); g.goals=(g.goals||[]).filter(x=>x.id!==id); g.us=g.goals.length; save(); render(); }
+// ---- Team switcher ----
+function openTeamSwitcher(){
+  let h=`<h3>Teams</h3>`;
+  h+=`<div class="muted" style="font-size:12.5px;margin:-4px 0 10px">Each team keeps its own roster, games, and season stats. Tap a team to switch to it.</div>`;
+  store.teams.forEach(t=>{
+    const active=t.id===store.activeTeamId;
+    const nm=t.name||t.settings.teamName||"Untitled";
+    const nGames=(t.games||[]).length, nPlayers=(t.roster||[]).length;
+    h+=`<div class="card" style="margin-bottom:8px;${active?'border:2px solid var(--green);':''}">
+      <div class="row between" style="align-items:center">
+        <div style="flex:1;min-width:0;cursor:pointer" onclick="switchTeam('${t.id}')">
+          <div style="font-weight:800;font-size:15px">${esc(nm)} ${active?'<span class="pill" style="background:var(--green);color:#fff">Current</span>':''}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px">${nPlayers} player${nPlayers===1?'':'s'} · ${nGames} game${nGames===1?'':'s'}</div>
+        </div>
+        <div class="row" style="gap:6px;flex:0 0 auto">
+          <button class="btn ghost sm" onclick="renameTeam('${t.id}')" title="Rename">✎</button>
+          <button class="btn red sm" onclick="deleteTeam('${t.id}')" title="Delete team" ${store.teams.length<=1?'disabled style="opacity:.4"':''}>✕</button>
+        </div>
+      </div></div>`;
+  });
+  h+=`<button class="btn wide" style="margin-top:4px" onclick="addTeam()">＋ Add a team</button>`;
+  h+=`<button class="btn ghost wide" style="margin-top:8px" onclick="closeSheet()">Close</button>`;
+  showSheet(h);
+}
 function showSheet(html){ document.getElementById("sheet").innerHTML=html; document.getElementById("overlay").classList.remove("hidden"); }
 function closeSheet(){ document.getElementById("overlay").classList.add("hidden"); }
 document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeSheet(); });
@@ -1965,16 +2413,32 @@ function renderRoster(){
   h+=`</div>`;
   h+=`<label class="fld" style="margin-left:2px">Team name</label><input value="${esc(state.settings.teamName||"")}" onchange="setTeam(this.value)" style="margin:0 0 6px">`;
   h+=`<label class="fld" style="margin-left:2px">Default formation for new games</label><select onchange="setDefFormation(this.value)">`;
-  formationsOfSize(8).forEach(f=>h+=`<option ${state.settings.defaultFormation===f?'selected':''}>${f}</option>`);
+  h+=formationOptionsHTML(state.settings.defaultFormation);
   h+=`</select>`;
+  // Team default game format — period structure + length. New games start from these; each game
+  // can still override them on its Pre-game tab (weather, doubleheaders, etc.).
+  const tf=normalizeFormat(state.settings.format);
+  h+=`<label class="fld" style="margin-left:2px">Game format for new games</label>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+      <select onchange="setTeamPeriodType(this.value)" style="width:auto">
+        <option value="quarters" ${tf.periodType==="quarters"?"selected":""}>Quarters (4)</option>
+        <option value="halves" ${tf.periodType==="halves"?"selected":""}>Halves (2)</option>
+      </select>
+      <input type="number" inputmode="decimal" min="1" max="60" step="1" style="width:64px" value="${fmt(tf.periodLength)}" onchange="setTeamPeriodLength(this.value)">
+      <span class="muted" style="font-size:12.5px">min per ${tf.periodType==="halves"?"half":"quarter"}</span>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin:4px 2px 0">Full game = ${tf.periods} × ${fmt(tf.periodLength)} = <b>${fmt(tf.periods*tf.periodLength)} min</b>. You can change this per game before kickoff.</div>`;
+  const thrMax=Math.ceil(tf.periodLength);
   h+=`<label class="fld" style="margin-left:2px">Sub-timing alert threshold</label>
     <div class="row" style="gap:8px;align-items:center">
-      <input type="number" inputmode="numeric" min="1" max="${QLEN}" step="1" style="width:64px" value="${state.settings.subAlertThreshold??6}" onchange="setSubAlertThreshold(this.value)">
+      <input type="number" inputmode="numeric" min="1" max="${thrMax}" step="1" style="width:64px" value="${state.settings.subAlertThreshold??6}" onchange="setSubAlertThreshold(this.value)">
       <span class="muted" style="font-size:12.5px">min straight on the field before a live game view flags that player</span>
     </div>`;
   return h;
 }
-function setSubAlertThreshold(v){ const n=Math.max(1,Math.min(QLEN,parseFloat(v)||6)); state.settings.subAlertThreshold=n; save(); render(); }
+function setTeamPeriodType(v){ const f=normalizeFormat(state.settings.format); f.periodType=(v==="halves"?"halves":"quarters"); state.settings.format=normalizeFormat(f); save(); render(); }
+function setTeamPeriodLength(v){ const f=normalizeFormat(state.settings.format); let n=parseFloat(v); if(!(n>0))n=QLEN; n=Math.min(60,n); f.periodLength=n; state.settings.format=normalizeFormat(f); save(); render(); }
+function setSubAlertThreshold(v){ const cap=Math.ceil(normalizeFormat(state.settings.format).periodLength); const n=Math.max(1,Math.min(cap,parseFloat(v)||6)); state.settings.subAlertThreshold=n; save(); render(); }
 function addPlayer(){ state.roster.push({id:uid("p"),name:"New player",gk:false,notes:""}); save(); render(); }
 function toggleGK(id){ const p=state.roster.find(x=>x.id===id); if(p){ p.gk=!p.gk; save(); render(); } }
 function setNumber(id,v){ const p=state.roster.find(x=>x.id===id); if(p){ p.number=(v===""||v==null)?null:String(v).trim(); save(); render(); } }
@@ -1987,39 +2451,142 @@ function setDefFormation(v){ state.settings.defaultFormation=v; save(); }
 
 //// ---------- Backup ----------
 function renderBackup(){
+  const curName=state.settings.teamName||activeTeam().name||"this team";
   let h=`<h2 style="margin:4px 2px;font-size:18px">Backup &amp; Data</h2>`;
   h+=`<div class="card"><b>Your data saves automatically</b><div class="muted" style="font-size:13.5px;margin-top:4px">
     Everything is stored on this phone's browser between games. To be safe — and to move to another phone — export a backup file now and then.</div></div>`;
-  h+=`<div class="card"><b style="font-size:14px">Export backup</b>
-    <div class="muted" style="font-size:13px;margin:3px 0 8px">Downloads a file with your roster, all games, and season stats.</div>
-    <button class="btn wide" onclick="doExport()">⬇︎ Export backup file</button></div>`;
-  h+=`<div class="card"><b style="font-size:14px">Import backup</b>
-    <div class="muted" style="font-size:13px;margin:3px 0 8px">Loads a backup file. This replaces all current data on this phone.</div>
+
+  h+=`<div class="card"><b style="font-size:14px">Export everything</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">One file with <b>all your teams</b>, their rosters, games, and season stats. Best for moving to a new phone.</div>
+    <button class="btn wide" onclick="doExportAll()">⬇︎ Export all teams</button></div>`;
+
+  h+=`<div class="card"><b style="font-size:14px">Export one team</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">Just <b>${esc(curName)}</b> — its roster, games, and stats. Handy for handing a single team's data to a co-coach.</div>
+    <button class="btn ghost wide" onclick="doExportTeam()">⬇︎ Export “${esc(curName)}”</button></div>`;
+
+  h+=`<div class="card"><b style="font-size:14px">Import a backup</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">Load a file. A <b>single-team</b> file is added as a new team (your other teams are untouched). An <b>all-teams</b> file replaces everything on this phone.</div>
     <input type="file" accept="application/json,.json" onchange="doImport(this.files[0])"></div>`;
-  h+=`<div class="card"><b style="font-size:14px;color:#c62828">Reset everything</b>
-    <div class="muted" style="font-size:13px;margin:3px 0 8px">Wipes all games and restores the original 12-player roster.</div>
-    <button class="btn red wide" onclick="doReset()">Reset all data</button></div>`;
+
+  h+=`<div class="card"><b style="font-size:14px;color:#c62828">Reset “${esc(curName)}”</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">Wipes just this team's games and roster. Your other teams stay put.</div>
+    <button class="btn red wide" onclick="doResetTeam()">Reset this team</button></div>`;
+
+  h+=`<div class="card"><b style="font-size:14px;color:#c62828">Erase all teams</b>
+    <div class="muted" style="font-size:13px;margin:3px 0 8px">Removes every team and all data on this phone, back to a single empty team.</div>
+    <button class="btn red wide" onclick="doResetAll()">Erase everything</button></div>`;
   return h;
 }
-function doExport(){
-  const data=JSON.stringify(state,null,2);
+function downloadJSON(obj,fnamePrefix){
+  const data=JSON.stringify(obj,null,2);
   const blob=new Blob([data],{type:"application/json"});
   const url=URL.createObjectURL(blob); const a=document.createElement("a");
   const d=new Date().toISOString().slice(0,10);
-  a.href=url; a.download="soccer-tracker-backup-"+d+".json"; document.body.appendChild(a); a.click();
+  a.href=url; a.download=fnamePrefix+"-"+d+".json"; document.body.appendChild(a); a.click();
   setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },500);
+}
+function slug(s){ return (s||"team").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")||"team"; }
+// ---- Share tab UI ----
+function renderShare(){
+  let h=`<h2 style="margin:4px 2px;font-size:18px">Share with assistant coaches</h2>`;
+  if(!shareEnabled()){
+    h+=`<div class="card"><b>Sharing isn't set up yet</b>
+      <div class="muted" style="font-size:13.5px;margin-top:4px">Team sharing needs a one-time backend setup (about 10 minutes, free). Follow <b>SHARING-SETUP.md</b> in the app's code, then paste your Worker URL into <code>SHARE_API</code> and redeploy. This tab lights up once that's done.</div></div>`;
+    h+=`<div class="card"><div class="muted" style="font-size:13px">What you'll get: a link your assistants open to see all your teams live (read-only), and a flag queue — when an assistant taps a player to flag a sub, goal, or tired, it shows up here for you to confirm.</div></div>`;
+    return h;
+  }
+  const s=shareState();
+  if(!s.on){
+    h+=`<div class="card"><b>Not sharing right now</b>
+      <div class="muted" style="font-size:13.5px;margin:4px 0 10px">Start sharing to publish a read-only view of <b>all your teams</b>. Anyone with the link can view — send it only to your coaches. You can stop or reset the link anytime.</div>
+      <button class="btn wide" onclick="startSharing()">📡 Start sharing</button></div>`;
+    return h;
+  }
+  const link=shareLink();
+  const when=s.lastPublishedAt? new Date(s.lastPublishedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : "—";
+  h+=`<div class="card"><div class="row between" style="align-items:center"><b>Sharing is on</b>
+    <span class="pill" style="background:var(--green);color:#fff">Live</span></div>
+    <div class="muted" style="font-size:12.5px;margin:6px 0 3px">Share link (view-only):</div>
+    <input readonly value="${esc(link)}" onclick="this.select()" style="width:100%;font-size:12.5px">
+    <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn sm" onclick="copyShareLink()">Copy link</button>
+      <button class="btn ghost sm" onclick="publishNow(false)">Update now</button>
+      <button class="btn ghost sm" onclick="rotateShareLink()">New link</button>
+      <button class="btn red sm" onclick="stopSharing()">Stop</button>
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:8px">Last published ${when}. Updates publish on their own as you make changes.${s.lastError?` <span style="color:#c62828">Last publish failed (${esc(s.lastError)}) — check signal, then Update now.</span>`:""}</div>
+  </div>`;
+  // flag queue
+  h+=`<h2 class="sec" style="margin-top:16px">Flags from assistants (${_flags.length})</h2>`;
+  if(!_flags.length){
+    h+=`<div class="card"><div class="muted" style="font-size:13px">No flags right now. When an assistant taps a player in their view to flag a sub, goal, or tired, it shows up here for you to confirm.</div></div>`;
+  } else {
+    _flags.slice().sort((a,b)=>a.at-b.at).forEach(f=>{
+      const team=store.teams.find(t=>t.id===f.teamId);
+      const icon=f.type==="goal"?"⚽":(f.type==="sub"?"⇄":(f.type==="tired"?"😓":"•"));
+      const nm=f.pid&&team? (()=>{ const p=team.roster.find(x=>x.id===f.pid); return p?p.name:(f.label||"Player"); })() : (f.label||"Note");
+      const t=new Date(f.at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+      h+=`<div class="card" style="margin-bottom:8px"><div class="row between" style="align-items:center">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:14px">${icon} ${esc(f.label||f.type)} — ${esc(nm)}</div>
+          <div class="muted" style="font-size:11.5px;margin-top:2px">${team?esc(team.name)+" · ":""}${f.by?"from "+esc(f.by)+" · ":""}${t}</div>
+        </div>
+        <div class="row" style="gap:6px;flex:0 0 auto">
+          <button class="btn sm" onclick="confirmFlag('${f.id}')">Confirm</button>
+          <button class="btn ghost sm" onclick="clearFlags(['${f.id}'])">Dismiss</button>
+        </div>
+      </div></div>`;
+    });
+    h+=`<button class="btn ghost wide" onclick="clearFlags([])">Dismiss all</button>`;
+  }
+  h+=`<div class="card" style="margin-top:12px"><div class="muted" style="font-size:12px">Anyone with the link sees <b>all</b> your teams, view-only. To cut off access, tap <b>Stop</b> or <b>New link</b>. Don't put anything in player notes you wouldn't want a co-coach to read.</div></div>`;
+  return h;
+}
+function copyShareLink(){ const link=shareLink(); if(!link) return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(()=>alert("Link copied.")).catch(()=>fallbackCopy(link)); }
+  else fallbackCopy(link);
+}
+// Export the whole multi-team store (fold the live view back first so the active team is current).
+function doExportAll(){ save(); downloadJSON(store,"gameday-all-teams"); }
+// Export just the active team, tagged so import knows it's a single team.
+function doExportTeam(){
+  save(); const t=activeTeam();
+  const payload={ _type:"gameday-team", team:JSON.parse(JSON.stringify(t)) };
+  downloadJSON(payload,"gameday-"+slug(t.name||t.settings.teamName));
 }
 function doImport(file){ if(!file)return; const r=new FileReader();
   r.onload=e=>{ try{ const obj=JSON.parse(e.target.result);
-    if(!obj.roster||!obj.games){ alert("That doesn't look like a tracker backup."); return; }
-    if(!confirm("Replace all current data with this backup?")) return;
-    state=obj; if(!state.settings)state.settings={defaultFormation:"3-3-1",teamName:"Team"}; save(); go("games");
+    // Single-team file → add as a new team, keep existing teams.
+    if(obj && obj._type==="gameday-team" && obj.team){
+      const t=normalizeTeam(obj.team); t.id=uid("t"); // fresh id to avoid collisions
+      if(!confirm('Add team "'+(t.name||"Untitled")+'" to this phone? Your other teams stay as they are.')) return;
+      store.teams.push(t); store.activeTeamId=t.id; bindActiveTeam(); save(); go("games"); return;
+    }
+    // All-teams store file → replace everything.
+    if(obj && Array.isArray(obj.teams)){
+      if(!confirm("Replace ALL teams and data on this phone with this backup?")) return;
+      store=toStore(obj); bindActiveTeam(); save(); applyTheme(); go("games"); return;
+    }
+    // Legacy single-team backup (old app version) → add as a new team.
+    if(obj && (obj.roster||obj.games)){
+      const t=toStore(obj).teams[0]; t.id=uid("t");
+      if(!confirm('This looks like an older single-team backup. Add it as a new team?')) return;
+      store.teams.push(t); store.activeTeamId=t.id; bindActiveTeam(); save(); go("games"); return;
+    }
+    alert("That doesn't look like a tracker backup.");
   }catch(err){ alert("Could not read that file."); } };
   r.readAsText(file);
 }
-function doReset(){ if(!confirm("Erase ALL data and restore the original roster?"))return;
-  if(!confirm("Are you sure? This cannot be undone (export a backup first if unsure)."))return;
-  state=defaultState(); save(); go("games"); }
+function doResetTeam(){
+  const t=activeTeam(); const nm=t.name||"this team";
+  if(!confirm('Erase all games and roster for "'+nm+'"?'))return;
+  if(!confirm("Are you sure? This can't be undone (export a backup first if unsure)."))return;
+  t.roster=[]; t.games=[]; t.settings=defaultTeamSettings(); t.settings.teamName=nm; t.name=nm;
+  bindActiveTeam(); save(); go("games");
+}
+function doResetAll(){ if(!confirm("Erase ALL teams and data on this phone?"))return;
+  if(!confirm("Are you sure? This wipes every team and cannot be undone."))return;
+  store=defaultStore(); bindActiveTeam(); save(); applyTheme(); go("games"); }
 
 //// ---------- utils ----------
 function esc(s){ return (s==null?"":String(s)).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -2114,6 +2681,8 @@ function toggleDarkMode(){ state.settings.darkMode=!state.settings.darkMode; sav
 document.querySelectorAll("nav.tabbar button").forEach(b=>b.addEventListener("click",()=>go(b.dataset.nav)));
 setupDrag();
 load(); applyTheme(); render();
+// If sharing was left on, resume polling for assistant flags and push a fresh snapshot.
+if(shareEnabled() && shareState().on && shareState().id){ startFlagPolling(); publishNow(true); }
 // Register the service worker so the app keeps working with no signal at the field.
 // Fails silently if unsupported (older browsers) — the app still works online either way.
 if("serviceWorker" in navigator){
