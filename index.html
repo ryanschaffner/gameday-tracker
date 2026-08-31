@@ -522,6 +522,7 @@ function save(){
 function shareEnabled(){ return !!SHARE_API; }
 function shareState(){ if(!store.share) store.share={id:null,editKey:null,on:false,lastPublishedAt:0,lastError:null}; return store.share; }
 function shareLink(){ const s=shareState(); if(!s.id) return ""; return location.origin+location.pathname.replace(/index\.html$/,"")+"viewer.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); }
+function parentLink(){ const s=shareState(); if(!s.id) return ""; return location.origin+location.pathname.replace(/index\.html$/,"")+"parents.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); }
 function randToken(n){ // url-safe random id/key
   const a=new Uint8Array(n); (crypto.getRandomValues?crypto.getRandomValues(a):a.forEach((_,i)=>a[i]=Math.floor(Math.random()*256)));
   return btoa(String.fromCharCode(...a)).replace(/[+/=]/g,c=>({"+":"-","/":"_","=":""}[c])).slice(0,n);
@@ -2514,18 +2515,23 @@ function renderShare(){
     return h;
   }
   const link=shareLink();
+  const plink=parentLink();
   const when=s.lastPublishedAt? new Date(s.lastPublishedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : "—";
   h+=`<div class="card"><div class="row between" style="align-items:center"><b>Sharing is on</b>
     <span class="pill" style="background:var(--green);color:#fff">Live</span></div>
-    <div class="muted" style="font-size:12.5px;margin:6px 0 3px">Share link (view-only):</div>
+    <div class="muted" style="font-size:12.5px;margin:8px 0 3px"><b>Assistant coaches</b> — full view + can flag subs/goals:</div>
     <input readonly value="${esc(link)}" onclick="this.select()" style="width:100%;font-size:12.5px">
-    <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
-      <button class="btn sm" onclick="copyShareLink()">Copy link</button>
+    <button class="btn sm" style="margin-top:6px" onclick="copyLink('assistant')">Copy assistant link</button>
+    <div class="muted" style="font-size:12.5px;margin:12px 0 3px"><b>Parents</b> — family-friendly, view-only:</div>
+    <input readonly value="${esc(plink)}" onclick="this.select()" style="width:100%;font-size:12.5px">
+    <button class="btn sm" style="margin-top:6px" onclick="copyLink('parent')">Copy parent link</button>
+    <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn ghost sm" onclick="publishNow(false)">Update now</button>
-      <button class="btn ghost sm" onclick="rotateShareLink()">New link</button>
+      <button class="btn ghost sm" onclick="rotateShareLink()">New links</button>
       <button class="btn red sm" onclick="stopSharing()">Stop</button>
     </div>
     <div class="muted" style="font-size:11.5px;margin-top:8px">Last published ${when}. Updates publish on their own as you make changes.${s.lastError?` <span style="color:#c62828">Last publish failed (${esc(s.lastError)}) — check signal, then Update now.</span>`:""}</div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Both links share the same data — Stop or New links affects both.</div>
   </div>`;
   // flag queue
   h+=`<h2 class="sec" style="margin-top:16px">Flags from assistants (${_flags.length})</h2>`;
@@ -2562,8 +2568,9 @@ function renderShare(){
   h+=`<div class="card" style="margin-top:12px"><div class="muted" style="font-size:12px">Anyone with the link sees <b>all</b> your teams, view-only. To cut off access, tap <b>Stop</b> or <b>New link</b>. Don't put anything in player notes you wouldn't want a co-coach to read.</div></div>`;
   return h;
 }
-function copyShareLink(){ const link=shareLink(); if(!link) return;
-  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(()=>alert("Link copied.")).catch(()=>fallbackCopy(link)); }
+function copyLink(which){ const link=which==="parent"?parentLink():shareLink(); if(!link) return;
+  const done=()=>alert((which==="parent"?"Parent":"Assistant")+" link copied.");
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(done).catch(()=>fallbackCopy(link)); }
   else fallbackCopy(link);
 }
 // Export the whole multi-team store (fold the live view back first so the active team is current).
