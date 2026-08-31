@@ -522,7 +522,7 @@ function save(){
 function shareEnabled(){ return !!SHARE_API; }
 function shareState(){ if(!store.share) store.share={id:null,editKey:null,on:false,lastPublishedAt:0,lastError:null}; return store.share; }
 function shareLink(){ const s=shareState(); if(!s.id) return ""; return location.origin+location.pathname.replace(/index\.html$/,"")+"viewer.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); }
-function parentLink(){ const s=shareState(); if(!s.id) return ""; return location.origin+location.pathname.replace(/index\.html$/,"")+"parents.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); }
+function parentLink(teamId){ const s=shareState(); if(!s.id) return ""; const base=location.origin+location.pathname.replace(/index\.html$/,"")+"parents.html?s="+encodeURIComponent(s.id)+"&api="+encodeURIComponent(SHARE_API); return teamId? base+"&team="+encodeURIComponent(teamId) : base; }
 function randToken(n){ // url-safe random id/key
   const a=new Uint8Array(n); (crypto.getRandomValues?crypto.getRandomValues(a):a.forEach((_,i)=>a[i]=Math.floor(Math.random()*256)));
   return btoa(String.fromCharCode(...a)).replace(/[+/=]/g,c=>({"+":"-","/":"_","=":""}[c])).slice(0,n);
@@ -2515,17 +2515,22 @@ function renderShare(){
     return h;
   }
   const link=shareLink();
-  const plink=parentLink();
   const when=s.lastPublishedAt? new Date(s.lastPublishedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}) : "—";
   h+=`<div class="card"><div class="row between" style="align-items:center"><b>Sharing is on</b>
     <span class="pill" style="background:var(--green);color:#fff">Live</span></div>
     <div class="muted" style="font-size:12.5px;margin:8px 0 3px"><b>Assistant coaches</b> — full view + can flag subs/goals:</div>
     <input readonly value="${esc(link)}" onclick="this.select()" style="width:100%;font-size:12.5px">
     <button class="btn sm" style="margin-top:6px" onclick="copyLink('assistant')">Copy assistant link</button>
-    <div class="muted" style="font-size:12.5px;margin:12px 0 3px"><b>Parents</b> — family-friendly, view-only:</div>
-    <input readonly value="${esc(plink)}" onclick="this.select()" style="width:100%;font-size:12.5px">
-    <button class="btn sm" style="margin-top:6px" onclick="copyLink('parent')">Copy parent link</button>
-    <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+    <div class="muted" style="font-size:12.5px;margin:14px 0 6px"><b>Parents</b> — family-friendly, view-only. Each team has its own link that shows <b>only that team</b>, so send each club just theirs:</div>`;
+  store.teams.forEach(tm=>{
+    const pl=parentLink(tm.id);
+    h+=`<div style="margin-bottom:10px">
+      <div style="font-size:12.5px;font-weight:700;margin-bottom:3px">${esc(tm.name||"Team")}</div>
+      <input readonly value="${esc(pl)}" onclick="this.select()" style="width:100%;font-size:12px">
+      <button class="btn sm" style="margin-top:5px" onclick="copyLink('parent','${tm.id}')">Copy ${esc(tm.name||"team")} parent link</button>
+    </div>`;
+  });
+  h+=`<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">
       <button class="btn ghost sm" onclick="publishNow(false)">Update now</button>
       <button class="btn ghost sm" onclick="rotateShareLink()">New links</button>
       <button class="btn red sm" onclick="stopSharing()">Stop</button>
@@ -2568,8 +2573,9 @@ function renderShare(){
   h+=`<div class="card" style="margin-top:12px"><div class="muted" style="font-size:12px">Anyone with the link sees <b>all</b> your teams, view-only. To cut off access, tap <b>Stop</b> or <b>New link</b>. Don't put anything in player notes you wouldn't want a co-coach to read.</div></div>`;
   return h;
 }
-function copyLink(which){ const link=which==="parent"?parentLink():shareLink(); if(!link) return;
-  const done=()=>alert((which==="parent"?"Parent":"Assistant")+" link copied.");
+function copyLink(which,teamId){ const link=which==="parent"?parentLink(teamId):shareLink(); if(!link) return;
+  const label=which==="parent"?"Parent":"Assistant";
+  const done=()=>alert(label+" link copied.");
   if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(link).then(done).catch(()=>fallbackCopy(link)); }
   else fallbackCopy(link);
 }
