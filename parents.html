@@ -100,12 +100,15 @@ async function fetchSnap(){
     const r=await fetch(SHARE_API+"/snap/"+encodeURIComponent(SHARE_ID));
     if(r.status===404){ showFatal("This link is no longer active. Ask the coach for the current one."); stopPoll(); return; }
     if(!r.ok) throw new Error("HTTP "+r.status);
-    const j=await r.json(); snap=j.data; lastError=null; lastFetch=Date.now();
-    // If this link is locked to a team, always select it (ignore the snapshot's active team).
+    const j=await r.json(); const newSnap=j.data; lastError=null; lastFetch=Date.now();
+    // Only do a full re-render when the data actually changed — otherwise just tick the clock. This
+    // keeps the notification button and layout stable instead of rebuilding every poll.
+    const changed = JSON.stringify(newSnap) !== JSON.stringify(snap);
+    snap=newSnap;
     if(LOCK_TEAM && snap.teams && snap.teams.find(t=>t.id===LOCK_TEAM)) activeTeamId=LOCK_TEAM;
     else if(!activeTeamId && snap.teams && snap.teams.length) activeTeamId=snap.activeTeamId||snap.teams[0].id;
-    render();
-  }catch(e){ lastError=(e&&e.message)||"network"; render(); }
+    if(changed) render(); else tick();
+  }catch(e){ const wasErr=!!lastError; lastError=(e&&e.message)||"network"; if(!wasErr) render(); else tick(); }
 }
 function startPoll(){ stopPoll(); pollTimer=setInterval(fetchSnap, 8000); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
@@ -159,7 +162,7 @@ function render(){
   let h="";
   // freshness line
   if(lastFetch){ const secs=Math.round((Date.now()-lastFetch)/1000);
-    h+=`<div class="fresh">${lastError?"Can't reach the latest — retrying…":("Updated "+(secs<5?"just now":secs+"s ago")+" · refreshes on its own")}</div>`; }
+    h+=`<div class="fresh" id="freshLine">${lastError?"Can't reach the latest — retrying…":("Updated "+(secs<5?"just now":secs+"s ago")+" · refreshes on its own")}</div>`; }
 
   // team switcher — only when NOT locked to a single team
   if(!LOCK_TEAM && snap.teams && snap.teams.length>1){
@@ -181,7 +184,27 @@ function render(){
   h+=renderRoster(g,t,live);
 
   document.getElementById("app").innerHTML=h;
+  // Populate the notification button once after a full render. It's async, so it fills in a moment
+  // later — that's fine because full renders only happen on real data changes, not every second.
   setTimeout(renderPushBtn,0);
+}
+
+// Lightweight per-second update: only the clock meta + freshness text change, so we write just those
+// nodes in place. This avoids rebuilding the whole page (which was wiping the notification button and
+// causing a ~1s flicker).
+function tick(){
+  if(!snap) return;
+  const t=team(); const g=t?latestGame(t):null; if(!g) return;
+  const live=gameIsLive(g);
+  const meta=document.getElementById("gameMeta");
+  if(meta){
+    if(live){ const qi=currentPeriodIdx(g); const q=g.quarters[qi]; const mm=Math.floor(clockElapsedSec(q,g)/60);
+      meta.innerHTML=`<span class="live-dot"></span>${periodLabel(g,qi)} · ${mm}′`; }
+    else meta.textContent="Final";
+  }
+  const fresh=document.getElementById("freshLine");
+  if(fresh && lastFetch){ const secs=Math.round((Date.now()-lastFetch)/1000);
+    fresh.textContent=lastError?"Can't reach the latest — retrying…":("Updated "+(secs<5?"just now":secs+"s ago")+" · refreshes on its own"); }
 }
 
 function renderScoreboard(g,t,live){
@@ -200,7 +223,7 @@ function renderScoreboard(g,t,live){
       <div class="sep">–</div>
       <div class="team"><div class="nm">${esc(themName)}</div><div class="n">${esc(String(them))}</div></div>
     </div>
-    <div class="gamemeta">${meta}</div>
+    <div class="gamemeta" id="gameMeta">${meta}</div>
   </div>`;
 }
 
@@ -285,7 +308,7 @@ function isOnFieldNow(g,pid){
 // Minutes played so far in THIS game, schedule-based to the current clock time per period.
 function todayMinutes(g){
   const mins={}; const P=periodsOf(g);
-  for(let qi=0;qi<P;qi++){ const q=g.quarters[qi]; const len=qlen(q,g);
+  for(let qi=0;qi<P;qi++){ const q=g.quarters[qi]; if(!q) continue; const len=qlen(q,g);
     const upto = Math.max(clockElapsedSec(q,g)/60, 0) || len; // if no clock, credit full period
     const cap = (g.quarters[qi].clock && (clockElapsedSec(q,g)>0)) ? clockElapsedSec(q,g)/60 : len;
     const slotIds=new Set([...Object.keys(q.lineup||{}), ...((q.subs||[]).map(s=>s.slot))]);
@@ -365,7 +388,7 @@ async function renderPushBtn(){
 }
 
 fetchSnap(); startPoll();
-setInterval(()=>{ if(snap) render(); }, 1000); // tick the clock/freshness display between fetches
+setInterval(tick, 1000); // update only the clock + freshness text each second, not the whole page
 </script>
 </body>
 </html>
