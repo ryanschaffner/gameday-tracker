@@ -2326,52 +2326,46 @@ function openSuggestSubs(qi){
   const g=curGame(); const hasTired=(g.tired||[]).length>0; const LEN=qlen(g.quarters[qi]);
   let h=`<h3>Suggest subs · ${periodLabel(g,qi)}</h3>`;
   h+=hasTired
-    ? `<div class="note">Bringing off your flagged 😓 tired players first, paired with your lowest-minute bench players. The keeper stays on. Minutes split automatically.</div>`
-    : `<div class="note">No one's flagged tired, so this brings on your freshest bench players for whoever's been on the field longest without a break (goalie time doesn't count against them). Tap a player below the field to flag them tired instead. The keeper stays on.</div>`;
+    ? `<div class="note">Your flagged 😓 tired players are suggested first, paired with your lowest-minute bench players. Check the ones you want, then add them to On deck — the keeper stays on.</div>`
+    : `<div class="note">No one's flagged tired, so this suggests your freshest bench players for whoever's been on the field longest without a break. Check the ones you want, then add them to On deck — the keeper stays on.</div>`;
   h+=`<label class="fld">Minute of the subs</label><input id="ssMin" type="number" inputmode="decimal" min="0" max="${LEN}" step="0.5" value="${clockMinuteNow(qi)??Math.min(6,LEN/2)}" onchange="renderSuggestPreview(${qi})">`;
   h+=`<div id="ssPreview"></div>`;
-  h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="applySuggestSubs(${qi})">Apply now</button>
-    <button class="btn wide" onclick="queueSuggestSubs(${qi})">⏳ Add to On deck</button></div>
-    <div class="row" style="margin-top:8px"><button class="btn ghost wide" onclick="closeSheet()">Cancel</button></div>
-    <div class="muted" style="font-size:11px;margin-top:8px"><b>Apply now</b> subs them in immediately. <b>Add to On deck</b> stages them so you send everyone together when the whistle goes.</div>`;
+  h+=`<div class="row" style="margin-top:14px;gap:8px"><button class="btn wide" onclick="queueSuggestSubs(${qi})">⏳ Add checked to On deck</button>
+    <button class="btn ghost" onclick="closeSheet()">Cancel</button></div>
+    <div class="muted" style="font-size:11px;margin-top:8px">Check the swaps you want. They go to On deck — send everyone together when the whistle goes.</div>`;
   showSheet(h); renderSuggestPreview(qi);
 }
 function renderSuggestPreview(qi){
   const g=curGame(); const LEN=qlen(g.quarters[qi]);
   const m=Math.max(0,Math.min(LEN, parseFloat(document.getElementById("ssMin").value)||0));
   const pairs=suggestSubPairs(qi,m);
-  let h=`<div class="ltlabel" style="margin-top:12px">Suggested swaps (${pairs.length})</div>`;
+  let h=`<div class="ltlabel" style="margin-top:12px">Suggested swaps (${pairs.length}) — check to include</div>`;
   if(!pairs.length) h+=`<div class="muted" style="font-size:13px">No bench players available to sub in right now.</div>`;
-  pairs.forEach(p=>{ h+=`<div class="sub-item"><span style="flex:1"><b>${esc(firstName(name(p.on)))}</b> on ⟶ ${p.pos} <span class="muted">(rest ${esc(firstName(name(p.off)))})</span></span></div>`; });
+  pairs.forEach((p,i)=>{
+    h+=`<label class="sub-item" style="cursor:pointer;align-items:center">
+      <input type="checkbox" class="ssPick" data-slot="${p.slot}" data-off="${p.off}" data-on="${p.on}" style="width:auto;margin-right:10px;flex:0 0 auto">
+      <span style="flex:1"><b>${esc(firstName(name(p.on)))}</b> on ⟶ ${p.pos} <span class="muted">(rest ${esc(firstName(name(p.off)))})</span></span></label>`;
+  });
   document.getElementById("ssPreview").innerHTML=h;
 }
-function applySuggestSubs(qi){
-  const g=curGame(); const q=g.quarters[qi];
-  const m=Math.max(0,Math.min(qlen(q), parseFloat(document.getElementById("ssMin").value)||0));
-  const pairs=suggestSubPairs(qi,m);
-  if(!pairs.length){ alert("No bench players available to sub in right now."); return; }
-  q.subs=q.subs||[];
-  pairs.forEach(p=>{ q.subs.push({id:uid("s"),slot:p.slot,minute:m,on:p.on}); clearTired(p.off); });
-  save(); closeSheet(); render();
-}
-// Stage the suggested pairs in the On-deck holding area instead of applying immediately. Skips any
-// player already queued (off or on) so it never creates a contradictory or duplicate pending entry.
+// Stage the CHECKED suggested pairs in the On-deck holding area. Skips any player already queued
+// (off or on) so it never creates a contradictory or duplicate pending entry.
 function queueSuggestSubs(qi){
   const g=curGame(); const q=g.quarters[qi];
-  const m=Math.max(0,Math.min(qlen(q), parseFloat(document.getElementById("ssMin").value)||0));
-  const pairs=suggestSubPairs(qi,m);
-  if(!pairs.length){ alert("No bench players available to sub in right now."); return; }
+  const checks=Array.from(document.querySelectorAll(".ssPick")).filter(c=>c.checked);
+  if(!checks.length){ alert("Check at least one swap to add."); return; }
   q.pending=q.pending||[];
   const queuedOff=new Set(q.pending.map(p=>p.off));
   const queuedOn=new Set(q.pending.map(p=>p.on));
-  let added=0;
-  pairs.forEach(p=>{
-    if(queuedOff.has(p.off) || queuedOn.has(p.on)) return; // already staged — skip
-    q.pending.push({id:uid("pd"), off:p.off, on:p.on, slot:p.slot});
-    queuedOff.add(p.off); queuedOn.add(p.on); added++;
+  let added=0, skipped=0;
+  checks.forEach(c=>{
+    const off=c.dataset.off, on=c.dataset.on, slot=c.dataset.slot;
+    if(queuedOff.has(off) || queuedOn.has(on)){ skipped++; return; }
+    q.pending.push({id:uid("pd"), off, on, slot});
+    queuedOff.add(off); queuedOn.add(on); added++;
   });
   save(); closeSheet(); render();
-  if(!added) alert("Those players are already on deck.");
+  if(!added && skipped) alert("Those players are already on deck.");
 }
 // ---- Goals & assists ----
 function openGoal(){
