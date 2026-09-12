@@ -2076,7 +2076,7 @@ function openQueueSub(qi){
   ons.forEach(pid=>{ h+=`<option value="${pid}">${esc(name(pid))}</option>`; });
   h+=`</select>`;
   h+=`<div class="row" style="gap:8px;margin-top:14px"><button class="btn" style="flex:1" onclick="addPending(${qi})">Add to On deck</button>
-    <button class="btn ghost" onclick="closeSheet()">Done</button></div>`;
+    <button class="btn ghost" onclick="closeQueueSheet()">Done</button></div>`;
   showSheet(h);
 }
 function addPending(qi){
@@ -2086,9 +2086,12 @@ function addPending(qi){
   const [slot,off]=offVal.split("|");
   q.pending.push({id:uid("pd"), off, on, slot});
   save();
-  // reopen the picker so you can stage several quickly; it recomputes available players
-  if(queueableOff(g,q).length && queueableOn(g,q).length) openQueueSub(qi); else { closeSheet(); render(); }
+  render(); // redraw the page so the On-deck card reflects the new pending pair right away
+  // reopen the picker so you can stage several quickly (it recomputes available players and
+  // re-opens over the freshly rendered page); if nobody's left to stage, just close.
+  if(queueableOff(g,q).length && queueableOn(g,q).length) openQueueSub(qi); else closeSheet();
 }
+function closeQueueSheet(){ closeSheet(); render(); }
 function delPending(qi,id){ const g=curGame(); const q=g.quarters[qi]; q.pending=(q.pending||[]).filter(x=>x.id!==id); save(); render(); }
 // Commit all pending pairs as real subs at the current clock minute, then clear the holding area.
 function sendPending(qi){
@@ -2438,7 +2441,7 @@ function openTeamSwitcher(){
 }
 function showSheet(html){ document.getElementById("sheet").innerHTML=html; document.getElementById("overlay").classList.remove("hidden"); }
 function closeSheet(){ document.getElementById("overlay").classList.add("hidden"); }
-document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay") closeSheet(); });
+document.getElementById("overlay").addEventListener("click",e=>{ if(e.target.id==="overlay"){ closeSheet(); render(); } });
 
 //// ---------- Season ----------
 function renderSeason(){
