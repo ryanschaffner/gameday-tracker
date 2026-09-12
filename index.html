@@ -53,6 +53,7 @@
   .picklist{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;}
   .pickbtn{background:#f2f5fa;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:15px;font-weight:600;color:var(--ink);text-align:left;}
   .pickbtn:active{background:#e6ebf3;}
+  .ondeck{border:1.5px dashed var(--d);background:#fff9ec;}
   /* cards & buttons */
   .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;margin:11px 0;
     box-shadow:0 1px 3px rgba(0,0,0,.04);}
@@ -1467,17 +1468,35 @@ function renderGameLive(g){
       <div style="margin-top:8px"><button class="btn sm" onclick="openSuggestSubs(${ui.qi})">✨ Suggest subs</button></div></div>`;
   }
   // subs
+  h+=`</div>`; // close the lineup/field card opened above
   h+=`<div class="row between" style="margin-top:14px"><b style="font-size:13px">Mid-${periodWord(g)} subs</b>
     <div class="toolbtns"><button class="btn ghost sm" onclick="openSuggestSubs(${ui.qi})">✨ Suggest</button>
     <button class="btn ghost sm" onclick="openMassSub(${ui.qi})">⇄ Sub bench</button>
-    <button class="btn sm" onclick="openSub(${ui.qi})">＋ Sub</button></div></div>`;
+    <button class="btn sm" onclick="openQueueSub(${ui.qi})">＋ Queue sub</button></div></div>`;
+
+  // On-deck holding area — pairs staged but not yet sent. They become real subs (at the clock time)
+  // only when you press Send. Persisted on the game so they survive lock/refresh.
+  const pend=(q.pending||[]);
+  if(pend.length){
+    const nowLbl=clockMinuteNow(ui.qi); const atTxt=(nowLbl!=null?fmt(nowLbl)+"'":"the clock time");
+    h+=`<div class="card ondeck"><div class="row between" style="align-items:center">
+        <b style="font-size:13px">⏳ On deck (${pend.length})</b>
+        <button class="btn sm" onclick="sendPending(${ui.qi})">▶ Send subs now</button></div>
+      <div class="muted" style="font-size:11.5px;margin:3px 0 8px">Ready to go in at ${atTxt} when you press Send. Nothing changes on the field until then.</div>`;
+    pend.forEach(p=>{ const slot=FORMATIONS[q.formation].slots.find(x=>x.id===p.slot);
+      h+=`<div class="sub-item"><span style="flex:1"><b>${esc(firstName(name(p.on)))}</b> <span class="muted">in for</span> ${esc(firstName(name(p.off)))} <span class="muted">(${slot?slot.pos:"?"})</span></span>
+        <button class="btn red sm" onclick="delPending(${ui.qi},'${p.id}')">✕</button></div>`; });
+    h+=`</div>`;
+  }
+
   const subs=(q.subs||[]).slice().sort((a,b)=>a.minute-b.minute);
+  h+=`<div class="card">`;
   if(subs.length){
     subs.forEach(sb=>{ const slot=FORMATIONS[q.formation].slots.find(x=>x.id===sb.slot);
       h+=`<div class="sub-item"><span class="t">${fmt(sb.minute)}'</span>
         <span style="flex:1">${slot?slot.pos:"?"}: <b>${esc(firstName(name(sb.on)))}</b> comes on</span>
         <button class="btn red sm" onclick="delSub(${ui.qi},'${sb.id}')">✕</button></div>`; });
-  } else h+=`<div class="muted" style="font-size:13px;margin-top:4px">No subs — everyone on the field plays the full ${fmt(qlen(q))} min this ${periodWord(g)}.</div>`;
+  } else h+=`<div class="muted" style="font-size:13px">No subs made yet — everyone on the field plays the full ${fmt(qlen(q))} min this ${periodWord(g)} unless you sub.</div>`;
   h+=`</div>`;
 
   // period minutes quick
@@ -1852,7 +1871,7 @@ function setFormation(qi,f){ const g=curGame(); const q=g.quarters[qi];
   if(q.formation!==f && (Object.keys(q.lineup).length||q.subs.length)){
     if(!confirm("Changing formation clears this "+periodWord(g)+"'s lineup. Continue?")){ render(); return; }
   }
-  q.formation=f; q.lineup={}; q.subs=[]; save(); render();
+  q.formation=f; q.lineup={}; q.subs=[]; q.pending=[]; save(); render();
 }
 // The formation chosen for the whole game (pre-game kickoff picker). Falls back to whatever's
 // stored on the game, then Q1's formation, then the team default. This is the shape the game is
@@ -1869,7 +1888,7 @@ function setGameFormation(f){
   const touched=g.quarters.some(q=>Object.keys(q.lineup).length||(q.subs||[]).length);
   if(touched && !confirm("Apply "+FORMATIONS[f].label+" to all "+gPeriods(g)+" "+periodWord(g)+"s? This clears any lineups you've already set.")){ render(); return; }
   g.formationChoice=f;
-  g.quarters.forEach(q=>{ q.formation=f; q.lineup={}; q.subs=[]; });
+  g.quarters.forEach(q=>{ q.formation=f; q.lineup={}; q.subs=[]; q.pending=[]; });
   save(); render();
 }
 // ---- Per-game format overrides (Pre-game) ----
@@ -1967,7 +1986,7 @@ function carryOver(qi){ const g=curGame(); if(qi<1) return; const prev=g.quarter
   g.quarters[qi]={formation:prev.formation, len:len, lineup:lineup, subs:[], clock:{running:false,startedAt:null,elapsedMs:0}};
   save(); render();
 }
-function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi].subs=[]; save(); render(); }
+function clearQ(qi){ const g=curGame(); g.quarters[qi].lineup={}; g.quarters[qi].subs=[]; g.quarters[qi].pending=[]; save(); render(); }
 // Shift whoever's currently in this quarter's lineup between defense/midfield/forward —
 // for squads with no bench to sub from. Leaves the goalkeeper alone (managed separately).
 // Slots within each FORMATIONS entry are already ordered D-block, then M-block, then F-block,
@@ -2026,6 +2045,65 @@ function assignSlot(qi,slot,pid){ const g=curGame(); const q=g.quarters[qi];
   save(); closeSheet(); render();
 }
 function delSub(qi,id){ const g=curGame(); const q=g.quarters[qi]; q.subs=q.subs.filter(x=>x.id!==id); save(); render(); }
+// ---- Pending subs ("on deck") ----
+// A pending entry {id, off, on, slot} stages a bench player (on) to replace a field player (off)
+// at their slot. It only becomes a real sub (in q.subs, stamped at the clock) when you press Send.
+function pendingList(q){ return q.pending||[]; }
+// Field players not already queued to come off, and bench players not already queued to come in —
+// so you can't stage contradictory moves.
+function queueableOff(g,q){
+  const queuedOff=new Set(pendingList(q).map(p=>p.off));
+  return FORMATIONS[q.formation].slots.map(s=>({slot:s.id,pos:s.pos,pid:slotOccupantAt(q,s.id,qlen(q))}))
+    .filter(x=>x.pid && !queuedOff.has(x.pid));
+}
+function queueableOn(g,q){
+  const present=activePresent(g);
+  const onField=new Set(FORMATIONS[q.formation].slots.map(s=>slotOccupantAt(q,s.id,qlen(q))).filter(Boolean));
+  const queuedOn=new Set(pendingList(q).map(p=>p.on));
+  return present.filter(pid=>!onField.has(pid) && !queuedOn.has(pid));
+}
+function openQueueSub(qi){
+  const g=curGame(); const q=g.quarters[qi];
+  const offs=queueableOff(g,q); const ons=queueableOn(g,q);
+  if(!offs.length){ alert("No field players left to queue off."); return; }
+  if(!ons.length){ alert("No bench players left to bring on. Everyone present is already on the field or queued."); return; }
+  let h=`<h3>Queue a sub</h3>`;
+  h+=`<div class="note">Stage who comes off and who goes on. It waits in <b>On deck</b> until you press <b>Send subs now</b> — then it happens at that moment's clock time.</div>`;
+  h+=`<label class="fld">Coming OFF (on field now)</label><select id="qOff">`;
+  offs.forEach(o=>{ h+=`<option value="${o.slot}|${o.pid}">${o.pos} — ${esc(name(o.pid))}</option>`; });
+  h+=`</select>`;
+  h+=`<label class="fld">Going ON (from bench)</label><select id="qOn">`;
+  ons.forEach(pid=>{ h+=`<option value="${pid}">${esc(name(pid))}</option>`; });
+  h+=`</select>`;
+  h+=`<div class="row" style="gap:8px;margin-top:14px"><button class="btn" style="flex:1" onclick="addPending(${qi})">Add to On deck</button>
+    <button class="btn ghost" onclick="closeSheet()">Done</button></div>`;
+  showSheet(h);
+}
+function addPending(qi){
+  const g=curGame(); const q=g.quarters[qi]; q.pending=q.pending||[];
+  const offVal=document.getElementById("qOff").value; const on=document.getElementById("qOn").value;
+  if(!offVal||!on) return;
+  const [slot,off]=offVal.split("|");
+  q.pending.push({id:uid("pd"), off, on, slot});
+  save();
+  // reopen the picker so you can stage several quickly; it recomputes available players
+  if(queueableOff(g,q).length && queueableOn(g,q).length) openQueueSub(qi); else { closeSheet(); render(); }
+}
+function delPending(qi,id){ const g=curGame(); const q=g.quarters[qi]; q.pending=(q.pending||[]).filter(x=>x.id!==id); save(); render(); }
+// Commit all pending pairs as real subs at the current clock minute, then clear the holding area.
+function sendPending(qi){
+  const g=curGame(); const q=g.quarters[qi]; const pend=q.pending||[];
+  if(!pend.length) return;
+  const minute=clockMinuteNow(qi); const m=(minute==null?0:minute);
+  q.subs=q.subs||[];
+  pend.forEach(p=>{
+    // guard: only apply if the "off" player is still actually in that slot at this minute
+    const cur=slotOccupantAt(q,p.slot,qlen(q));
+    if(cur===p.off){ q.subs.push({id:uid("s"),slot:p.slot,minute:m,on:p.on}); clearTired(p.off); }
+  });
+  q.pending=[];
+  save(); render();
+}
 
 //// ---------- Pickers ----------
 function openPicker(qi,slot){
